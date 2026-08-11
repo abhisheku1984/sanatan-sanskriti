@@ -1,0 +1,1644 @@
+
+========================================
+FILE: src/components/AudioPlayer.tsx
+========================================
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Play, Pause, Square } from 'lucide-react';
+import { speak, stopSpeaking, pauseSpeaking, resumeSpeaking } from '../lib/tts';
+import { translateText } from '../lib/translate';
+import { t } from '../lib/translations';
+import DharmaWheel from './DharmaWheel';
+
+interface AudioPlayerProps {
+  text: string;
+  language: string;
+  title?: string;
+  compact?: boolean;
+}
+
+export default function AudioPlayer({ text, language, title, compact = false }: AudioPlayerProps) {
+  const [status, setStatus] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle');
+  const translatedRef = useRef<string>('');
+
+  useEffect(() => { return () => { stopSpeaking(); }; }, []);
+  useEffect(() => { stopSpeaking(); setStatus('idle'); translatedRef.current = ''; }, [text, language]);
+
+  const handlePlay = useCallback(async () => {
+    if (status === 'paused') { resumeSpeaking(); setStatus('playing'); return; }
+    
+    setStatus('loading');
+    
+    // Translate the text to the selected language first
+    let textToSpeak = text;
+    try {
+      if (language !== 'English') {
+        if (translatedRef.current) {
+          textToSpeak = translatedRef.current;
+        } else {
+          const translated = await translateText(text, language);
+          translatedRef.current = translated;
+          textToSpeak = translated;
+        }
+      }
+    } catch {
+      // If translation fails, speak original text
+    }
+    
+    await speak(textToSpeak, language, () => setStatus('idle'));
+    setStatus('playing');
+  }, [status, text, language]);
+
+  const handlePause = useCallback(() => { pauseSpeaking(); setStatus('paused'); }, []);
+  const handleStop = useCallback(() => { stopSpeaking(); setStatus('idle'); }, []);
+
+  const isActive = status === 'playing' || status === 'loading';
+
+  if (compact) {
+    return (
+      <button
+        onClick={status === 'playing' ? handlePause : handlePlay}
+        disabled={status === 'loading'}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-vermillion/30 text-vermillion text-[12px] font-medium hover:bg-vermillion/5 transition-colors disabled:opacity-50"
+        title={`${t('listen', language)} - ${language}`}>
+        {status === 'loading' ? (
+          <div className="w-3 h-3 border-2 border-vermillion/30 border-t-vermillion rounded-full animate-spin" />
+        ) : (
+          <DharmaWheel size={16} spinning={status === 'playing'} />
+        )}
+        {status === 'loading' ? '...' : status === 'playing' ? t('pause', language) : t('listen', language)}
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 bg-surface-warm border border-border rounded-lg px-4 py-2.5">
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={status === 'playing' ? handlePause : handlePlay}
+          disabled={status === 'loading'}
+          className="w-9 h-9 rounded-full bg-vermillion text-white flex items-center justify-center hover:bg-vermillion-deep transition-colors disabled:opacity-60">
+          {status === 'loading' ? (
+            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+          ) : status === 'playing' ? <Pause size={15} /> : <Play size={15} className="ml-0.5" />}
+        </button>
+        {(status === 'playing' || status === 'paused') && (
+          <button onClick={handleStop} className="w-7 h-7 rounded-full border border-border text-ink-muted flex items-center justify-center hover:bg-parchment-warm transition-colors">
+            <Square size={11} />
+          </button>
+        )}
+      </div>
+      <div className="flex-shrink-0"><DharmaWheel size={36} spinning={status === 'playing'} /></div>
+      <div className="flex-1 min-w-0">
+        {title && <p className="text-[13px] font-medium text-ink truncate">{title}</p>}
+        <p className="text-[11px] text-ink-faint">
+          {status === 'loading' ? `${t('playingIn', language)} ${language}…` 
+            : status === 'playing' ? `${t('playingIn', language)} ${language}…`
+            : status === 'paused' ? t('paused', language)
+            : `${t('audioNarration', language)} · ${language}`}
+        </p>
+        {status === 'playing' && (
+          <p className="text-[10px] font-devanagari text-vermillion/80 mt-0.5 italic samay-fade">॥ मैं समय हूँ — I am Time ॥</p>
+        )}
+      </div>
+      {status === 'playing' && (
+        <div className="flex items-end gap-[3px] h-5">
+          {[1,2,3,4,5].map(i => (<div key={i} className="w-[3px] bg-vermillion rounded-full animate-pulse-soft" style={{ height: `${4+Math.random()*16}px`, animationDelay: `${i*0.12}s` }} />))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+========================================
+FILE: src/components/BookReader.tsx
+========================================
+
+import { useState, useEffect } from 'react';
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Minus, Plus, Languages } from 'lucide-react';
+import { motion } from 'framer-motion';
+import AudioPlayer from './AudioPlayer';
+import LoadingSpinner from './LoadingSpinner';
+import { t } from '../lib/translations';
+import { translateText } from '../lib/translate';
+
+interface Chapter { id: number; book_id: number; chapter_number: number; title: string; content: string; }
+interface Book { id: number; title: string; author: string; description: string; language: string; category: string; cover_image: string; total_chapters: number; }
+
+export default function BookReader({ book, onBack, language }: { book: Book; onBack: () => void; language: string }) {
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [fontSize, setFontSize] = useState(16);
+  const [translatedContent, setTranslatedContent] = useState<string>('');
+  const [translatedTitle, setTranslatedTitle] = useState<string>('');
+  const [translating, setTranslating] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/chapters?book_id=${book.id}`).then(r => r.json()).then(setChapters).catch(console.error).finally(() => setLoading(false));
+  }, [book.id]);
+
+  // Translate chapter content when language or chapter changes
+  useEffect(() => {
+    const chapter = chapters[currentIdx];
+    if (!chapter) return;
+
+    if (language === 'English') {
+      setTranslatedContent(chapter.content);
+      setTranslatedTitle(chapter.title);
+      return;
+    }
+
+    setTranslating(true);
+    setTranslatedContent('');
+    setTranslatedTitle('');
+
+    Promise.all([
+      translateText(chapter.content, language),
+      translateText(chapter.title, language),
+    ]).then(([content, title]) => {
+      setTranslatedContent(content);
+      setTranslatedTitle(title);
+    }).catch(() => {
+      setTranslatedContent(chapter.content);
+      setTranslatedTitle(chapter.title);
+    }).finally(() => setTranslating(false));
+  }, [chapters, currentIdx, language]);
+
+  const chapter = chapters[currentIdx];
+  if (loading) return <LoadingSpinner />;
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-3xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-ink-muted hover:text-vermillion text-sm transition-colors"><ArrowLeft size={15} /> {t('backToLibrary', language)}</button>
+        <div className="flex items-center gap-2">
+          {/* Language indicator */}
+          <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-vermillion/8 text-vermillion text-[11px] font-medium">
+            <Languages size={12} />
+            {language}
+          </div>
+          <div className="flex items-center gap-1 border border-border rounded-md">
+            <button onClick={() => setFontSize(Math.max(12, fontSize - 2))} className="px-2 py-1 text-ink-muted hover:text-ink"><Minus size={13} /></button>
+            <span className="text-[11px] text-ink-faint px-1">{fontSize}px</span>
+            <button onClick={() => setFontSize(Math.min(26, fontSize + 2))} className="px-2 py-1 text-ink-muted hover:text-ink"><Plus size={13} /></button>
+          </div>
+        </div>
+      </div>
+
+      <div className="text-center mb-8">
+        <h1 className="font-display text-2xl md:text-3xl font-semibold text-ink">{book.title}</h1>
+        <p className="text-ink-faint text-sm mt-1">{book.author}</p>
+      </div>
+
+      {chapters.length > 0 && (
+        <div className="flex items-center justify-between mb-5 bg-surface border border-border rounded-lg px-3 py-2">
+          <button onClick={() => setCurrentIdx(Math.max(0, currentIdx - 1))} disabled={currentIdx === 0}
+            className="flex items-center gap-1 text-[13px] text-ink-muted hover:text-vermillion disabled:opacity-30 disabled:cursor-not-allowed"><ChevronLeft size={14} /> {t('previous', language)}</button>
+          <select value={currentIdx} onChange={e => setCurrentIdx(Number(e.target.value))} className="bg-parchment border border-border rounded-md px-2 py-1 text-[13px] text-ink max-w-[200px] truncate">
+            {chapters.map((ch, idx) => <option key={ch.id} value={idx}>Ch. {ch.chapter_number}: {ch.title}</option>)}
+          </select>
+          <button onClick={() => setCurrentIdx(Math.min(chapters.length - 1, currentIdx + 1))} disabled={currentIdx === chapters.length - 1}
+            className="flex items-center gap-1 text-[13px] text-ink-muted hover:text-vermillion disabled:opacity-30 disabled:cursor-not-allowed">{t('next', language)} <ChevronRight size={14} /></button>
+        </div>
+      )}
+
+      {chapter ? (
+        <div className="bg-surface border border-border rounded-xl p-6 md:p-10">
+          <h2 className="font-display text-xl font-semibold text-ink mb-1">
+            {t('chapters', language)} {chapter.chapter_number}: {translatedTitle || chapter.title}
+          </h2>
+          
+          {/* Audio plays the translated text */}
+          <div className="mb-5">
+            <AudioPlayer 
+              text={translatedContent || chapter.content} 
+              language={language} 
+              title={`Ch. ${chapter.chapter_number} — ${translatedTitle || chapter.title}`} 
+            />
+          </div>
+
+          {/* Translation loading state */}
+          {translating && (
+            <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-vermillion/5 border border-vermillion/15 rounded-lg">
+              <div className="w-4 h-4 border-2 border-vermillion/30 border-t-vermillion rounded-full animate-spin" />
+              <p className="text-vermillion text-sm">
+                {language === 'Hindi' ? 'अनुवाद हो रहा है' : language === 'Tamil' ? 'மொழிபெயர்க்கப்படுகிறது' : 'Translating'} → {language}…
+              </p>
+            </div>
+          )}
+
+          {/* Translated content */}
+          <div
+            className="text-ink-light leading-[1.85] whitespace-pre-wrap"
+            style={{ fontSize: `${fontSize}px` }}
+          >
+            {translatedContent || chapter.content}
+          </div>
+        </div>
+      ) : (
+        <div className="text-center py-16 text-ink-faint"><BookOpen size={36} className="mx-auto mb-3 opacity-40" /><p>{t('noBooks', language)}</p></div>
+      )}
+    </motion.div>
+  );
+}
+
+
+========================================
+FILE: src/components/TempleCard.tsx
+========================================
+
+import { useState, useEffect } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { t } from '../lib/translations';
+import { translateText } from '../lib/translate';
+import AudioPlayer from './AudioPlayer';
+
+interface Temple {
+  id: number; name: string; hindi_name: string; type: string; state: string; city: string;
+  latitude: number; longitude: number; description: string; significance: string; deity: string;
+}
+
+const TYPE_ACCENT: Record<string, string> = { 'Jyotirlinga': 'border-l-vermillion', 'Shakti Peetha': 'border-l-lotus', 'Char Dham': 'border-l-sage', 'Major Temple': 'border-l-turmeric' };
+const TYPE_BADGE: Record<string, string> = { 'Jyotirlinga': 'bg-vermillion/8 text-vermillion', 'Shakti Peetha': 'bg-lotus/10 text-lotus', 'Char Dham': 'bg-sage/10 text-sage', 'Major Temple': 'bg-turmeric/10 text-turmeric-deep' };
+
+export default function TempleCard({ temple, language, index }: { temple: Temple; language: string; index: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const [trDesc, setTrDesc] = useState('');
+  const [trSig, setTrSig] = useState('');
+  const [translating, setTranslating] = useState(false);
+
+  useEffect(() => {
+    if (!expanded) return;
+    if (language === 'English') {
+      setTrDesc(temple.description);
+      setTrSig(temple.significance);
+      return;
+    }
+    setTranslating(true);
+    Promise.all([
+      translateText(temple.description, language),
+      translateText(temple.significance, language),
+    ]).then(([d, s]) => { setTrDesc(d); setTrSig(s); })
+      .catch(() => { setTrDesc(temple.description); setTrSig(temple.significance); })
+      .finally(() => setTranslating(false));
+  }, [expanded, language, temple.id]);
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(index * 0.03, 0.5) }}
+      className={`bg-surface border border-border rounded-lg overflow-hidden border-l-[3px] ${TYPE_ACCENT[temple.type] || 'border-l-border'}`}>
+      <button onClick={() => setExpanded(!expanded)} className="w-full text-left px-4 py-3.5 flex items-start gap-3 hover:bg-parchment/50 transition-colors">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <h3 className="font-display text-base font-semibold text-ink">{temple.name}</h3>
+            <span className="font-devanagari text-ink-faint text-[13px]">({temple.hindi_name})</span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${TYPE_BADGE[temple.type] || 'bg-parchment-warm text-ink-muted'}`}>{temple.type}</span>
+            <span className="text-ink-faint text-[12px]">{temple.city}, {temple.state}</span>
+            <span className="text-ink-faint text-[12px]">· {temple.deity}</span>
+          </div>
+        </div>
+        <div className="flex-shrink-0 mt-1 text-ink-faint">{expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+      </button>
+      <AnimatePresence>
+        {expanded && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25 }} className="overflow-hidden">
+            <div className="px-4 pb-4 space-y-3 border-t border-border-light pt-3">
+              <AudioPlayer text={`${temple.name}. ${trDesc || temple.description}. ${trSig || temple.significance}`} language={language} title={`${temple.name} — ${t('audioGuide', language)}`} />
+              
+              {translating && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-vermillion/5 border border-vermillion/15 rounded-lg">
+                  <div className="w-3 h-3 border-2 border-vermillion/30 border-t-vermillion rounded-full animate-spin" />
+                  <p className="text-vermillion text-xs">Translating → {language}…</p>
+                </div>
+              )}
+
+              <div><h4 className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint mb-1">{t('historicalBg', language)}</h4><p className="text-[14px] text-ink-light leading-relaxed">{trDesc || temple.description}</p></div>
+              <div><h4 className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint mb-1">{t('significanceLegend', language)}</h4><p className="text-[14px] text-ink-light leading-relaxed">{trSig || temple.significance}</p></div>
+              <div className="flex items-center gap-4 text-[11px] text-ink-faint pt-1">
+                <span>{t('deity', language)}: <strong className="text-ink-muted">{temple.deity}</strong></span>
+                <span>{t('location', language)}: {temple.latitude.toFixed(2)}°N, {temple.longitude.toFixed(2)}°E</span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+
+========================================
+FILE: src/lib/tts.ts
+========================================
+
+// Text-to-Speech utility using Web Speech API
+// Fixed: proper voice loading, correct language matching
+
+const LANGUAGE_CODES: Record<string, string> = {
+  'English': 'en-IN',
+  'Hindi': 'hi-IN',
+  'Sanskrit': 'hi-IN', // Sanskrit uses Hindi voice as closest match
+  'Tamil': 'ta-IN',
+  'Telugu': 'te-IN',
+  'Bengali': 'bn-IN',
+  'Gujarati': 'gu-IN',
+  'Kannada': 'kn-IN',
+  'Malayalam': 'ml-IN',
+  'Marathi': 'mr-IN',
+  'Odia': 'or-IN',
+  'Punjabi': 'pa-IN',
+};
+
+// Broader fallback codes for voice matching
+const LANG_PREFIX: Record<string, string> = {
+  'English': 'en', 'Hindi': 'hi', 'Sanskrit': 'hi',
+  'Tamil': 'ta', 'Telugu': 'te', 'Bengali': 'bn',
+  'Gujarati': 'gu', 'Kannada': 'kn', 'Malayalam': 'ml',
+  'Marathi': 'mr', 'Odia': 'or', 'Punjabi': 'pa',
+};
+
+export function getLanguageCode(language: string): string {
+  return LANGUAGE_CODES[language] || 'hi-IN';
+}
+
+// Ensure voices are loaded (they load asynchronously in many browsers)
+let voicesLoaded = false;
+let voicesPromise: Promise<SpeechSynthesisVoice[]> | null = null;
+
+function loadVoices(): Promise<SpeechSynthesisVoice[]> {
+  if (voicesLoaded) return Promise.resolve(window.speechSynthesis.getVoices());
+  if (voicesPromise) return voicesPromise;
+
+  voicesPromise = new Promise((resolve) => {
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      voicesLoaded = true;
+      resolve(voices);
+      return;
+    }
+    // Chrome loads voices asynchronously
+    window.speechSynthesis.onvoiceschanged = () => {
+      voicesLoaded = true;
+      resolve(window.speechSynthesis.getVoices());
+    };
+    // Fallback timeout
+    setTimeout(() => {
+      voicesLoaded = true;
+      resolve(window.speechSynthesis.getVoices());
+    }, 1000);
+  });
+  return voicesPromise;
+}
+
+// Pre-load voices on module import
+if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+  loadVoices();
+}
+
+function findBestVoice(voices: SpeechSynthesisVoice[], language: string): SpeechSynthesisVoice | null {
+  const exactCode = LANGUAGE_CODES[language];
+  const prefix = LANG_PREFIX[language] || 'hi';
+
+  // 1. Exact match (e.g. hi-IN)
+  let voice = voices.find(v => v.lang === exactCode);
+  if (voice) return voice;
+
+  // 2. Prefix match (e.g. hi)
+  voice = voices.find(v => v.lang.startsWith(prefix + '-'));
+  if (voice) return voice;
+
+  voice = voices.find(v => v.lang === prefix);
+  if (voice) return voice;
+
+  // 3. Google voice with the language name
+  voice = voices.find(v => v.name.toLowerCase().includes(language.toLowerCase()));
+  if (voice) return voice;
+
+  // 4. Any Indian voice for Indian languages
+  if (language !== 'English') {
+    voice = voices.find(v => v.lang.endsWith('-IN') && v.lang.startsWith(prefix));
+    if (voice) return voice;
+  }
+
+  return null;
+}
+
+export async function speak(text: string, language: string, onEnd?: () => void): Promise<SpeechSynthesisUtterance | null> {
+  if (!('speechSynthesis' in window)) {
+    console.warn('TTS not supported');
+    return null;
+  }
+
+  window.speechSynthesis.cancel();
+
+  const voices = await loadVoices();
+  const langCode = getLanguageCode(language);
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = langCode;
+  utterance.rate = 0.9;
+  utterance.pitch = 1;
+  utterance.volume = 1;
+
+  const bestVoice = findBestVoice(voices, language);
+  if (bestVoice) {
+    utterance.voice = bestVoice;
+    utterance.lang = bestVoice.lang; // Use the voice's actual lang code
+  }
+
+  if (onEnd) utterance.onend = onEnd;
+  utterance.onerror = (e) => {
+    console.error('TTS error:', e);
+    if (onEnd) onEnd();
+  };
+
+  // Chrome bug: long texts stop after ~15s. Workaround: keep-alive timer
+  let keepAlive: ReturnType<typeof setInterval> | null = null;
+  utterance.onstart = () => {
+    keepAlive = setInterval(() => {
+      if (!window.speechSynthesis.speaking) {
+        if (keepAlive) clearInterval(keepAlive);
+        return;
+      }
+      window.speechSynthesis.pause();
+      window.speechSynthesis.resume();
+    }, 10000);
+  };
+  const origOnEnd = utterance.onend;
+  utterance.onend = (e) => {
+    if (keepAlive) clearInterval(keepAlive);
+    if (origOnEnd) (origOnEnd as any)(e);
+  };
+
+  window.speechSynthesis.speak(utterance);
+  return utterance;
+}
+
+export function stopSpeaking(): void {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+}
+
+export function pauseSpeaking(): void {
+  if ('speechSynthesis' in window) window.speechSynthesis.pause();
+}
+
+export function resumeSpeaking(): void {
+  if ('speechSynthesis' in window) window.speechSynthesis.resume();
+}
+
+export function isSpeaking(): boolean {
+  return 'speechSynthesis' in window ? window.speechSynthesis.speaking : false;
+}
+
+
+========================================
+FILE: src/pages/ChintyagamaPage.tsx
+========================================
+
+import { motion } from 'framer-motion';
+import AudioPlayer from '../components/AudioPlayer';
+import SectionDivider from '../components/SectionDivider';
+import DharmaWheel from '../components/DharmaWheel';
+
+function Section({ id, title, hindiTitle, children }: { id: string; title: string; hindiTitle: string; children: React.ReactNode }) {
+  return (
+    <section id={id} className="mb-10">
+      <motion.div initial={{ opacity: 0, y: 12 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ duration: 0.5 }}>
+        <h2 className="font-display text-2xl md:text-3xl font-bold text-ink mb-1">{title}</h2>
+        <p className="font-devanagari text-vermillion text-base mb-4">{hindiTitle}</p>
+        <div className="space-y-4 text-ink-light text-[15px] leading-relaxed">{children}</div>
+      </motion.div>
+    </section>
+  );
+}
+
+function Verse({ sanskrit, transliteration, meaning }: { sanskrit: string; transliteration: string; meaning: string }) {
+  return (
+    <div className="bg-parchment-warm border border-border rounded-xl p-5 my-4">
+      <p className="font-devanagari text-ink text-base leading-relaxed mb-2">{sanskrit}</p>
+      <p className="text-ink-muted text-sm italic mb-2">{transliteration}</p>
+      <p className="text-ink-light text-sm">{meaning}</p>
+    </div>
+  );
+}
+
+function TattvaTable() {
+  const shuddha = [
+    ['1', 'Shiva Tattva (शिव तत्त्व)', 'Sadashiva', 'Pure consciousness, the ultimate reality, unchanging witness. The Pati (Lord) in absolute transcendence.'],
+    ['2', 'Shakti Tattva (शक्ति तत्त्व)', 'Parashakti', 'The dynamic creative power of Shiva. Inseparable from Shiva as moonlight from moon. Iccha (will), Jnana (knowledge), Kriya (action).'],
+    ['3', 'Sadashiva Tattva (सदाशिव तत्त्व)', 'Sadashiva', 'The first stirring of creation — "I am This" (Aham Idam). Will (Iccha) predominates. Grace begins to flow.'],
+    ['4', 'Ishvara Tattva (ईश्वर तत्त्व)', 'Maheshvara', 'Knowledge predominates — "This am I" (Idam Aham). The cosmic blueprint takes form. Divine architect function.'],
+    ['5', 'Shuddhavidya Tattva (शुद्धविद्या तत्त्व)', 'Ananta/Sadyojata', 'Perfect balance of "I" and "This". Pure knowledge where subject and object are equally present. Action (Kriya) predominates.'],
+  ];
+
+  const shuddhAshuddha = [
+    ['6', 'Maya Tattva (माया तत्त्व)', 'Ananteshvara', 'The veiling power that creates multiplicity from unity. Root of all limitation. Not illusion but real creative power of Shiva.'],
+    ['7', 'Kala (कला)', 'Kala-Rudra', 'Limited agency — gives the bound soul a fraction of Kriya Shakti. "I can do a little."'],
+    ['8', 'Vidya / Niyati (विद्या)', 'Vidya-Rudra', 'Limited knowledge — gives partial Jnana Shakti. "I know a little." Creates sense of determinism.'],
+    ['9', 'Raga (राग)', 'Raga-Rudra', 'Limited desire — attachment to particular objects. Creates longing and incompleteness.'],
+    ['10', 'Kala/Time (काल)', 'Kala-Rudra', 'Temporal limitation — subjects the soul to past, present, future. Creates urgency and mortality.'],
+    ['11', 'Niyati (नियति)', 'Niyati-Rudra', 'Spatial/causal limitation — binds the soul to specific place, cause-effect chains. Restriction of omnipresence.'],
+    ['12', 'Purusha (पुरुष)', 'Kshetrajña', 'The individual soul (Pashu) encased in the five Kanchukas (6–11). The bound experiencer.'],
+  ];
+
+  const ashuddha = [
+    ['13', 'Prakriti (प्रकृति)', 'Brahma', 'Primordial nature. Equilibrium of three Gunas (Sattva, Rajas, Tamas). Root of material creation.'],
+    ['14', 'Buddhi (बुद्धि)', 'Brahma', 'Intellect — discriminative faculty. First evolute of Prakriti. Determines, judges, decides.'],
+    ['15', 'Ahamkara (अहंकार)', 'Rudra', 'Ego-sense — "I-maker." Creates identification with body-mind. Three modes: Sattvic, Rajasic, Tamasic.'],
+    ['16', 'Manas (मनस्)', 'Chandra', 'Mind — processes sense data, creates doubt, deliberates. Bridge between senses and intellect.'],
+    ['17–21', 'Jnanendriyas (ज्ञानेन्द्रिय)', 'Various Devatas', 'Five knowledge senses: Hearing (Shrotra/Dik), Touch (Tvak/Vayu), Sight (Chakshu/Surya), Taste (Rasana/Varuna), Smell (Ghrana/Ashvins).'],
+    ['22–26', 'Karmendriyas (कर्मेन्द्रिय)', 'Various Devatas', 'Five action senses: Speech (Vak/Agni), Grasping (Pani/Indra), Locomotion (Pada/Vishnu), Excretion (Payu/Mrityu), Reproduction (Upastha/Prajapati).'],
+    ['27–31', 'Tanmatras (तन्मात्र)', 'Various', 'Five subtle elements: Sound (Shabda), Touch (Sparsha), Form (Rupa), Taste (Rasa), Smell (Gandha). Subtle blueprints of gross elements.'],
+    ['32–36', 'Mahabhutas (महाभूत)', 'Various', 'Five gross elements: Akasha (Space), Vayu (Air), Agni (Fire), Apas (Water), Prithvi (Earth). The manifest physical creation.'],
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h4 className="font-display text-lg font-semibold text-ink mb-2">I. शुद्ध तत्त्व — Pure Tattvas (1–5)</h4>
+        <p className="text-ink-muted text-sm mb-3">The realm of Shiva — beyond Maya, beyond limitation. Pure consciousness and its creative powers.</p>
+        <div className="overflow-x-auto"><table className="w-full text-sm border-collapse">
+          <thead><tr className="border-b-2 border-border"><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">#</th><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">Tattva</th><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">Presiding Deity</th><th className="text-left py-2 text-ink-faint text-[10px] uppercase tracking-wider">Function & Significance</th></tr></thead>
+          <tbody>{shuddha.map(r => <tr key={r[0]} className="border-b border-border-light"><td className="py-2 pr-2 text-vermillion font-bold">{r[0]}</td><td className="py-2 pr-2 font-medium text-ink">{r[1]}</td><td className="py-2 pr-2 text-ink-muted">{r[2]}</td><td className="py-2 text-ink-light text-[13px]">{r[3]}</td></tr>)}</tbody>
+        </table></div>
+      </div>
+      <div>
+        <h4 className="font-display text-lg font-semibold text-ink mb-2">II. शुद्ध-अशुद्ध तत्त्व — Mixed Tattvas (6–12)</h4>
+        <p className="text-ink-muted text-sm mb-3">The realm of Maya and the five Kanchukas (sheaths of limitation) that bind the infinite soul into finite experience.</p>
+        <div className="overflow-x-auto"><table className="w-full text-sm border-collapse">
+          <thead><tr className="border-b-2 border-border"><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">#</th><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">Tattva</th><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">Presiding Deity</th><th className="text-left py-2 text-ink-faint text-[10px] uppercase tracking-wider">Function & Significance</th></tr></thead>
+          <tbody>{shuddhAshuddha.map(r => <tr key={r[0]} className="border-b border-border-light"><td className="py-2 pr-2 text-turmeric-deep font-bold">{r[0]}</td><td className="py-2 pr-2 font-medium text-ink">{r[1]}</td><td className="py-2 pr-2 text-ink-muted">{r[2]}</td><td className="py-2 text-ink-light text-[13px]">{r[3]}</td></tr>)}</tbody>
+        </table></div>
+      </div>
+      <div>
+        <h4 className="font-display text-lg font-semibold text-ink mb-2">III. अशुद्ध तत्त्व — Impure Tattvas (13–36)</h4>
+        <p className="text-ink-muted text-sm mb-3">The realm of Prakriti — material creation from intellect to gross elements. The domain of embodied experience.</p>
+        <div className="overflow-x-auto"><table className="w-full text-sm border-collapse">
+          <thead><tr className="border-b-2 border-border"><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">#</th><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">Tattva</th><th className="text-left py-2 pr-2 text-ink-faint text-[10px] uppercase tracking-wider">Presiding Deity</th><th className="text-left py-2 text-ink-faint text-[10px] uppercase tracking-wider">Function & Significance</th></tr></thead>
+          <tbody>{ashuddha.map(r => <tr key={r[0]} className="border-b border-border-light"><td className="py-2 pr-2 text-sage font-bold">{r[0]}</td><td className="py-2 pr-2 font-medium text-ink">{r[1]}</td><td className="py-2 pr-2 text-ink-muted">{r[2]}</td><td className="py-2 text-ink-light text-[13px]">{r[3]}</td></tr>)}</tbody>
+        </table></div>
+      </div>
+    </div>
+  );
+}
+
+export default function ChintyagamaPage({ language }: { language: string }) {
+  const toc = [
+    { id: 'intro', label: 'Introduction & Provenance' },
+    { id: 'chatushpada', label: 'The Fourfold Path' },
+    { id: 'kriya', label: '— Kriya Pada' },
+    { id: 'charya', label: '— Charya Pada' },
+    { id: 'yoga', label: '— Yoga Pada' },
+    { id: 'jnana', label: '— Jnana / Vidya Pada' },
+    { id: 'verses', label: 'Core Verses' },
+    { id: 'tattvas', label: 'The 36 Tattvas' },
+    { id: 'conclusion', label: 'Conclusion & Access' },
+  ];
+
+  return (
+    <div className="pt-6 pb-12 px-4">
+      <div className="max-w-4xl mx-auto">
+        {/* Title */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-10">
+          <div className="flex justify-center mb-4"><DharmaWheel size={60} spinning={true} color="#C24D2B" /></div>
+          <h1 className="font-display text-3xl md:text-5xl font-bold text-ink">Chintyāgama</h1>
+          <p className="font-devanagari text-2xl text-vermillion mt-2">चिन्त्यागम</p>
+          <p className="text-ink-muted mt-2 text-lg">The Third of the Twenty-Eight Primary Shaiva Āgamas</p>
+          <p className="font-devanagari text-ink-faint text-sm mt-1">अष्टाविंशति शैवागमेषु तृतीयः — शैवसिद्धान्त दर्शन का गहन अध्ययन</p>
+        </motion.div>
+
+        {/* Audio for full intro */}
+        <div className="mb-8">
+          <AudioPlayer text="Chintyagama, the third of the twenty-eight primary Shaiva Agamas, is a profound scripture of the Shaiva Siddhanta tradition. Revealed from the Sadyojata face of Lord Sadashiva, it originally comprised one hundred thousand shlokas. Its name Chintya means that which must be contemplated, reflecting its emphasis on deep metaphysical reflection combined with practical temple worship and community rituals." language={language} title="चिन्त्यागम — Complete Audio Introduction" />
+        </div>
+
+        {/* Table of Contents */}
+        <div className="bg-surface border border-border rounded-xl p-5 mb-10">
+          <h3 className="font-display text-sm font-semibold text-ink-faint uppercase tracking-wider mb-3">विषय-सूची — Table of Contents</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+            {toc.map((item, i) => (
+              <a key={item.id} href={`#${item.id}`} className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-ink-muted hover:text-vermillion hover:bg-vermillion/5 transition-colors">
+                <span className="text-vermillion/50 text-xs">{i + 1}.</span> {item.label}
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {/* ===== SECTION 1: INTRODUCTION ===== */}
+        <Section id="intro" title="1. Introduction & Scriptural Provenance" hindiTitle="१. प्रस्तावना एवं शास्त्रीय उत्पत्ति">
+          <p>The <strong>Shaiva Siddhanta</strong> tradition represents one of the most systematic and philosophically rigorous schools of Hindu theology. At its foundation lie the <strong>twenty-eight primary Shaiva Āgamas</strong> (अष्टाविंशति शैवागम), revealed by the five faces of Lord Sadāshiva — each face emanating a distinct set of scriptures that together constitute the complete body of Shaiva knowledge.</p>
+
+          <p>The <strong>Chintyāgama</strong> (चिन्त्यागम) occupies the <strong>third position</strong> among these twenty-eight Āgamas. Its name derives from the Sanskrit root <em>chint</em> (चिन्त्) meaning "to contemplate" or "to reflect deeply" — thus <strong>Chintyāgama is "The Scripture of That Which Must Be Contemplated."</strong> This name is not merely titular; it encapsulates the Āgama's fundamental orientation toward integrating rigorous metaphysical contemplation (<em>tattva-chintana</em>) with practical ritual application (<em>kriyā-anuṣṭhāna</em>).</p>
+
+          <Verse
+            sanskrit="शिवात् दीप्तः, दीप्ताद् गोपतिः, गोपतेश्च अम्बिका ।
+एवं परम्परा-प्राप्तं चिन्त्यागमम् अनुत्तमम् ॥"
+            transliteration="Śivāt Dīptaḥ, Dīptād Gopatiḥ, Gopateśca Ambikā | Evaṃ paramparā-prāptaṃ Chintyāgamam anuttamam ||"
+            meaning="From Shiva to Dipta, from Dipta to Gopati, and from Gopati to Ambika — thus was the supreme Chintyagama received through the sacred lineage of transmission."
+          />
+
+          <h3 className="font-display text-lg font-semibold text-ink mt-6 mb-2">Origin from the Sadyojāta Face</h3>
+          <p>The Chintyāgama emanates from <strong>Sadyojāta</strong> (सद्योजात), the westward-facing aspect of Sadāshiva. Sadyojāta represents <strong>creation, manifestation, and the initiatory impulse</strong> — the face through which Shiva's grace first touches the manifest world. This face is associated with the element of <strong>Earth (Pṛthvī)</strong>, the color <strong>white</strong>, and the creative function within the Pañchabrahma system.</p>
+
+          <p>The original scope of the Chintyāgama is traditionally stated as <strong>one lakh (1,00,000) shlokas</strong> — a vast encyclopedic corpus. Like many Āgamas, the available recensions represent condensed versions transmitted through specific lineages, with the full text considered partially lost to the ravages of time.</p>
+
+          <h3 className="font-display text-lg font-semibold text-ink mt-6 mb-2">Cosmic Symbolism: Placement at the Padāṅguli (Toes)</h3>
+          <p>In the esoteric mapping of the twenty-eight Āgamas onto the <strong>cosmic body of Sadāshiva</strong> (Āgama-Puruṣa), the Chintyāgama is assigned to the <strong>Padāṅguli (पादाङ्गुलि) — the toes</strong>. This placement is profoundly significant:</p>
+          <ul className="list-disc pl-6 space-y-2">
+            <li><strong>Foundation and Movement:</strong> The toes are the point of contact between the divine body and the earth — representing the Āgama's emphasis on <em>practical application</em> and <em>grounded ritual action</em>.</li>
+            <li><strong>Balance and Stability:</strong> Just as toes provide balance for the entire body, the Chintyāgama provides the stabilizing foundation of community worship and temple culture.</li>
+            <li><strong>Functional Execution:</strong> Toes enable locomotion — symbolizing this Āgama's role in <em>moving</em> devotees from bondage (paśu-bhāva) toward liberation (Śiva-sāyujya) through step-by-step ritual progression.</li>
+          </ul>
+
+          <h3 className="font-display text-lg font-semibold text-ink mt-6 mb-2">The Six Upāgamas (उपागम)</h3>
+          <p>Each primary Āgama has subsidiary texts called Upāgamas that elaborate on specific aspects. The Chintyāgama's six Upāgamas are:</p>
+          <div className="overflow-x-auto"><table className="w-full text-sm border-collapse mt-2">
+            <thead><tr className="border-b-2 border-border"><th className="text-left py-2 pr-3 text-ink-faint text-[10px] uppercase tracking-wider">#</th><th className="text-left py-2 pr-3 text-ink-faint text-[10px] uppercase tracking-wider">Upāgama</th><th className="text-left py-2 pr-3 text-ink-faint text-[10px] uppercase tracking-wider">Sanskrit</th><th className="text-left py-2 text-ink-faint text-[10px] uppercase tracking-wider">Primary Focus</th></tr></thead>
+            <tbody>
+              <tr className="border-b border-border-light"><td className="py-2 pr-3 text-vermillion font-bold">1</td><td className="py-2 pr-3 font-medium">Sachintya</td><td className="py-2 pr-3 font-devanagari text-ink-muted">सचिन्त्य</td><td className="py-2 text-ink-light">Extended contemplative methods; advanced meditation techniques on Shiva-tattva</td></tr>
+              <tr className="border-b border-border-light"><td className="py-2 pr-3 text-vermillion font-bold">2</td><td className="py-2 pr-3 font-medium">Subhaga</td><td className="py-2 pr-3 font-devanagari text-ink-muted">सुभग</td><td className="py-2 text-ink-light">Auspicious rites; prosperity rituals, Shri-puja, and Lakshmi-Shiva combined worship</td></tr>
+              <tr className="border-b border-border-light"><td className="py-2 pr-3 text-vermillion font-bold">3</td><td className="py-2 pr-3 font-medium">Vāma</td><td className="py-2 pr-3 font-devanagari text-ink-muted">वाम</td><td className="py-2 text-ink-light">Left-hand (Vāmācāra) ritual frameworks; Shakti-oriented worship within Shaiva context</td></tr>
+              <tr className="border-b border-border-light"><td className="py-2 pr-3 text-vermillion font-bold">4</td><td className="py-2 pr-3 font-medium">Pāpanāśa</td><td className="py-2 pr-3 font-devanagari text-ink-muted">पापनाश</td><td className="py-2 text-ink-light">Destruction of sin; expiatory rites (prāyaścitta), purification protocols, karmic cleansing</td></tr>
+              <tr className="border-b border-border-light"><td className="py-2 pr-3 text-vermillion font-bold">5</td><td className="py-2 pr-3 font-medium">Parodava</td><td className="py-2 pr-3 font-devanagari text-ink-muted">परोदव</td><td className="py-2 text-ink-light">Supreme emergence; cosmogonic processes, creation-dissolution cycles, Shiva's Pañchakṛtya</td></tr>
+              <tr className="border-b border-border-light"><td className="py-2 pr-3 text-vermillion font-bold">6</td><td className="py-2 pr-3 font-medium">Amṛta</td><td className="py-2 pr-3 font-devanagari text-ink-muted">अमृत</td><td className="py-2 text-ink-light">Nectar of immortality; Soma rituals, Amṛta-dhāra meditation, liberation through grace</td></tr>
+            </tbody>
+          </table></div>
+        </Section>
+
+        <SectionDivider className="my-8" />
+
+        {/* ===== SECTION 2: CHATUSHPADA ===== */}
+        <Section id="chatushpada" title="2. The Fourfold Path (Chatuṣpāda System)" hindiTitle="२. चतुष्पाद प्रणाली — चार मार्गों का विस्तृत विवेचन">
+          <p>Like all primary Shaiva Āgamas, the Chintyāgama is structured around the <strong>Chatuṣpāda</strong> (चतुष्पाद) — the Four Pādas or "quarters" that together constitute the complete path from ignorance to liberation:</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 my-4">
+            {[
+              { name: 'Kriyā Pāda', hindi: 'क्रिया पाद', desc: 'Ritual Action', color: 'bg-vermillion/8 text-vermillion' },
+              { name: 'Caryā Pāda', hindi: 'चर्या पाद', desc: 'Daily Conduct', color: 'bg-turmeric/8 text-turmeric-deep' },
+              { name: 'Yoga Pāda', hindi: 'योग पाद', desc: 'Yogic Practice', color: 'bg-sage/8 text-sage' },
+              { name: 'Jñāna Pāda', hindi: 'ज्ञान पाद', desc: 'Knowledge', color: 'bg-lotus/8 text-lotus' },
+            ].map(p => (
+              <div key={p.name} className={`rounded-lg p-3 text-center ${p.color}`}>
+                <p className="font-display font-bold text-sm">{p.name}</p>
+                <p className="font-devanagari text-xs mt-0.5">{p.hindi}</p>
+                <p className="text-[11px] mt-1 opacity-70">{p.desc}</p>
+              </div>
+            ))}
+          </div>
+        </Section>
+
+        {/* KRIYA PADA */}
+        <Section id="kriya" title="2.1 Kriyā Pāda — The Path of Sacred Action" hindiTitle="२.१ क्रिया पाद — पवित्र कर्म का मार्ग">
+          <p>The Kriyā Pāda of the Chintyāgama is arguably its most extensive section, reflecting the Āgama's foundational emphasis on <strong>temple-centric worship</strong> as the primary vehicle for spiritual transformation. It covers:</p>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">A. Temple Architecture (Ālaya-Nirmāṇa / आलय-निर्माण)</h4>
+          <ul className="list-disc pl-6 space-y-1">
+            <li><strong>Bhū-parīkṣā</strong> — Land selection through soil testing, water-table analysis, and directional auspiciousness</li>
+            <li><strong>Vāstu-Puruṣa Maṇḍala</strong> — The sacred geometric grid (64 or 81 squares) governing temple layout</li>
+            <li><strong>Garbhagṛha specifications</strong> — Sanctum dimensions, door placement, wall thickness ratios (1:2:4 system)</li>
+            <li><strong>Vimāna types</strong> — Classification of temple towers: Nagara (North), Drāviḍa (South), Vesara (hybrid)</li>
+            <li><strong>Prākāra</strong> — Concentric enclosure walls representing progressive levels of sacred space</li>
+          </ul>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">B. Icon-Making & Installation (Mūrti-Pratiṣṭhā / मूर्ति-प्रतिष्ठा)</h4>
+          <ul className="list-disc pl-6 space-y-1">
+            <li><strong>Śilpa-lakṣaṇa</strong> — Iconographic proportions (Tālamāna system: Daśatāla for Shiva, Navatāla for Vishnu)</li>
+            <li><strong>Material hierarchy</strong> — Stone (Śilā) → Metal (Dhātu) → Wood (Dāru) → Clay (Mṛttikā), with specific stones for specific deities</li>
+            <li><strong>Prāṇa-pratiṣṭhā</strong> — The elaborate ritual of "life-installation" through which the deity's consciousness is invoked into the image, involving Nyāsa, Prāṇāyāma, and Mantra-japa</li>
+            <li><strong>Netra-unmīlana</strong> — The ceremonial "eye-opening" of the deity, marking the moment the mūrti becomes a living divine presence</li>
+          </ul>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">C. Linga Characteristics & Worship</h4>
+          <p>The Chintyāgama provides detailed classifications of <strong>Shiva Liṅgas</strong>:</p>
+          <ul className="list-disc pl-6 space-y-1">
+            <li><strong>Svayambhū Liṅga</strong> — Self-manifested (e.g., Jyotirlingas)</li>
+            <li><strong>Daivika Liṅga</strong> — Installed by Devas</li>
+            <li><strong>Ārṣa Liṅga</strong> — Installed by Rishis</li>
+            <li><strong>Mānuṣa Liṅga</strong> — Installed by humans, further classified by material and size</li>
+            <li><strong>Bāṇa Liṅga</strong> — Natural stone Liṅgas from the Narmada river</li>
+          </ul>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">D. Ritual Worship (Pūjā, Homa, Japa)</h4>
+          <p>The Chintyāgama prescribes the <strong>Ṣoḍaśopacāra Pūjā</strong> (sixteen-step worship) as the standard daily temple ritual, along with elaborate Homa (fire sacrifice) procedures and Mantra-japa sequences specific to each deity form of Shiva.</p>
+
+          <Verse
+            sanskrit="क्रियाहीनं न सिद्ध्यति मन्त्रं कोटिजपैरपि ।
+क्रियायुक्तं तु मन्त्राणां सद्यः फलदमुच्यते ॥"
+            transliteration="Kriyāhīnaṃ na siddhyati mantraṃ koṭijapairapi | Kriyāyuktaṃ tu mantrāṇāṃ sadyaḥ phaladamucyate ||"
+            meaning="A mantra without proper ritual action (kriyā) does not bear fruit even after ten million repetitions. But a mantra joined with proper kriyā is said to grant immediate results."
+          />
+        </Section>
+
+        {/* CHARYA PADA */}
+        <Section id="charya" title="2.2 Caryā Pāda — The Path of Disciplined Conduct" hindiTitle="२.२ चर्या पाद — अनुशासित आचरण का मार्ग">
+          <p>The Caryā Pāda establishes the <strong>daily behavioral framework</strong> for the Shaiva practitioner (sādhaka) and temple priest (ācārya). It transforms every moment of daily life into an act of worship:</p>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">Daily Worship Protocol (Nitya-Pūjā-Vidhi)</h4>
+          <ul className="list-disc pl-6 space-y-1">
+            <li><strong>Brāhma Muhūrta</strong> — Rising 96 minutes before sunrise; Śiva-smaraṇa (remembrance of Shiva) as the first act</li>
+            <li><strong>Snāna-vidhi</strong> — Ritual bathing with mantras; application of Vibhūti (sacred ash) in Tripuṇḍra (three horizontal lines)</li>
+            <li><strong>Sandhyā-vandana</strong> — Shaiva twilight prayers at dawn, noon, and dusk</li>
+            <li><strong>Pañcakāla Pūjā</strong> — Five-time daily worship cycle: Abhigamana, Upādāna, Ijyā, Svādhyāya, Yoga</li>
+          </ul>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">Vrata & Festival Calendar</h4>
+          <p>The Chintyāgama prescribes specific <strong>vratas</strong> (vows) including Pradoṣa Vrata, Śivarātri, Somavāra Vrata, and Ārdra Darśana. It details the <strong>Brahmotsava</strong> (grand temple festival) protocol spanning 9–12 days with specific rituals for each day.</p>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">Prāyaścitta (Expiatory Rites)</h4>
+          <p>Detailed protocols for purification after ritual errors, breach of vows, or contamination. Includes Kṛcchra, Cāndrāyaṇa, and Agama-specific penances.</p>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">Japa-Mālā Rules & Yogapaṭṭa</h4>
+          <ul className="list-disc pl-6 space-y-1">
+            <li><strong>Rudrākṣa Mālā</strong> — 108 beads of specific mukhi (faces) for different purposes; Pañchamukhī for general Shiva japa</li>
+            <li><strong>Yogapaṭṭa</strong> — The meditation band/strap used to maintain posture during extended japa sessions; regulations for its consecration and use</li>
+          </ul>
+        </Section>
+
+        {/* YOGA PADA */}
+        <Section id="yoga" title="2.3 Yoga Pāda — The Path of Inner Union" hindiTitle="२.३ योग पाद — आन्तरिक एकत्व का मार्ग">
+          <p>The Yoga Pāda of the Chintyāgama presents a sophisticated system of <strong>Shaiva Yoga</strong> that integrates classical Aṣṭāṅga Yoga with the Āgamic framework of the 36 Tattvas:</p>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">The 36 Tattvas and Their Presiding Deities (Tattveshvara)</h4>
+          <p>The Chintyāgama provides a complete mapping of the <strong>36 Tattvas</strong> (categories of existence) with their presiding deities (Tattveshvaras). This framework is unique to Shaiva Siddhanta and represents the most detailed ontological map in Indian philosophy. <em>(See detailed table in Section 4 below.)</em></p>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">Aṣṭāṅga Yoga (Shaiva Interpretation)</h4>
+          <ul className="list-disc pl-6 space-y-1">
+            <li><strong>Yama</strong> — Non-violence, truthfulness, non-stealing, brahmacharya, and aparigraha — interpreted through Shaiva lens as service to Shiva in all beings</li>
+            <li><strong>Niyama</strong> — Śauca (purity), Santoṣa (contentment), Tapas (Shiva-directed austerity), Svādhyāya (Āgama study), Īśvara-praṇidhāna (surrender to Shiva)</li>
+            <li><strong>Āsana</strong> — Padmāsana, Siddhāsana, Svastikāsana for extended meditation; body as temple of Shiva</li>
+            <li><strong>Prāṇāyāma</strong> — Nāḍī-śuddhi (channel purification) through alternate nostril breathing; Śiva-bīja (Hauṃ) synchronized with breath</li>
+            <li><strong>Pratyāhāra</strong> — Withdrawal of senses into the inner Shiva-liṅga at the heart (Hṛdaya-liṅga)</li>
+            <li><strong>Dhāraṇā</strong> — Concentration on the five Brahmamantras at five body centers</li>
+            <li><strong>Dhyāna</strong> — Meditation on Sadāśiva's five faces; progressive dissolution of Tattvas</li>
+            <li><strong>Samādhi</strong> — Absorption in Shiva-tattva; experience of Śiva-sāyujya (union with Shiva)</li>
+          </ul>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">Kuṇḍalinī Awakening</h4>
+          <p>The Chintyāgama describes the <strong>Kuṇḍalinī Śakti</strong> as the coiled serpent power resting at the Mūlādhāra Chakra. Through systematic practice of Prāṇāyāma, Bandha (locks), and Mantra, the Kuṇḍalinī ascends through the six Chakras:</p>
+          <div className="overflow-x-auto"><table className="w-full text-sm border-collapse mt-2">
+            <thead><tr className="border-b-2 border-border"><th className="text-left py-2 pr-3 text-ink-faint text-[10px] uppercase">Chakra</th><th className="text-left py-2 pr-3 text-ink-faint text-[10px] uppercase">Location</th><th className="text-left py-2 pr-3 text-ink-faint text-[10px] uppercase">Element</th><th className="text-left py-2 pr-3 text-ink-faint text-[10px] uppercase">Petals</th><th className="text-left py-2 text-ink-faint text-[10px] uppercase">Presiding Shiva Form</th></tr></thead>
+            <tbody>
+              {[
+                ['Mūlādhāra', 'Base of spine', 'Earth', '4', 'Brahmā (creative aspect)'],
+                ['Svādhiṣṭhāna', 'Below navel', 'Water', '6', 'Viṣṇu (sustaining aspect)'],
+                ['Maṇipūra', 'Solar plexus', 'Fire', '10', 'Rudra (transformative aspect)'],
+                ['Anāhata', 'Heart center', 'Air', '12', 'Maheśvara (grace-bestowing)'],
+                ['Viśuddha', 'Throat', 'Space', '16', 'Sadāśiva (revealing aspect)'],
+                ['Ājñā', 'Between eyebrows', 'Mind', '2', 'Paramaśiva (transcendent)'],
+                ['Sahasrāra', 'Crown', 'Beyond elements', '1000', 'Śiva-Śakti in eternal union'],
+              ].map(r => <tr key={r[0]} className="border-b border-border-light"><td className="py-2 pr-3 font-medium text-ink">{r[0]}</td><td className="py-2 pr-3 text-ink-muted">{r[1]}</td><td className="py-2 pr-3 text-ink-muted">{r[2]}</td><td className="py-2 pr-3 text-vermillion font-bold">{r[3]}</td><td className="py-2 text-ink-light">{r[4]}</td></tr>)}
+            </tbody>
+          </table></div>
+
+          <Verse
+            sanskrit="कुण्डलिनी शक्तिरूपा सा मूलाधारे व्यवस्थिता ।
+षट्चक्रभेदनं कृत्वा सहस्रारे शिवं व्रजेत् ॥"
+            transliteration="Kuṇḍalinī śaktirūpā sā mūlādhāre vyavasthitā | Ṣaṭcakrabhedanaṃ kṛtvā sahasrāre śivaṃ vrajet ||"
+            meaning="The Kundalini, in the form of Shakti, is established at the Muladhara. Piercing through the six Chakras, she reaches Shiva at the Sahasrara."
+          />
+        </Section>
+
+        {/* JNANA PADA */}
+        <Section id="jnana" title="2.4 Jñāna / Vidyā Pāda — The Path of Liberating Knowledge" hindiTitle="२.४ ज्ञान / विद्या पाद — मुक्तिदायक ज्ञान का मार्ग">
+          <p>The Jñāna Pāda represents the <strong>philosophical summit</strong> of the Chintyāgama. It presents the core metaphysical framework of Shaiva Siddhanta through the <strong>Pati-Paśu-Pāśa</strong> (पति-पशु-पाश) doctrine:</p>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">The Three Eternal Categories (Padārtha-Traya)</h4>
+
+          <div className="bg-parchment-warm border border-border rounded-xl p-5 my-4">
+            <h5 className="font-display font-bold text-vermillion mb-2">I. Pati (पति) — The Lord</h5>
+            <p className="text-ink-light text-sm">Shiva as the Supreme Reality — omniscient, omnipotent, omnipresent, and infinitely compassionate. He is <strong>Svātantrya</strong> (absolutely independent), <strong>Sarvajña</strong> (all-knowing), and <strong>Pūrṇa</strong> (complete). Unlike the Advaita Vedanta conception of Brahman as nirguṇa (without qualities), Shaiva Siddhanta's Shiva is <strong>Saguṇa</strong> — possessing infinite auspicious qualities while transcending all limitation.</p>
+          </div>
+
+          <div className="bg-parchment-warm border border-border rounded-xl p-5 my-4">
+            <h5 className="font-display font-bold text-turmeric-deep mb-2">II. Paśu (पशु) — The Bound Soul</h5>
+            <p className="text-ink-light text-sm">The individual soul (Ātman/Jīva) is <strong>eternally real</strong> — not an illusion, not a modification of Brahman, but a distinct conscious entity. However, it is bound by three fetters (Pāśa). The soul is <strong>Jña</strong> (knowing) by nature but its knowledge is <strong>obscured</strong> by Mala. The Chintyāgama emphasizes that the soul's bondage is beginningless (anādi) but <strong>has an end</strong> — through Shiva's grace.</p>
+          </div>
+
+          <div className="bg-parchment-warm border border-border rounded-xl p-5 my-4">
+            <h5 className="font-display font-bold text-sage mb-2">III. Pāśa (पाश) — The Threefold Bond</h5>
+            <ul className="list-disc pl-6 space-y-2 text-ink-light text-sm">
+              <li><strong>Āṇava Mala (आणव मल)</strong> — The innate impurity of finitude. The primordial ignorance that makes the infinite soul feel limited. It is <strong>beginningless</strong> and can only be removed by Shiva's direct grace (Śaktipāta). It is compared to the husk on rice — inherent but removable.</li>
+              <li><strong>Māyā Mala (माया मल)</strong> — The material impurity. Maya is the <strong>real</strong> substance from which the 36 Tattvas (from Kalā to Pṛthvī) are evolved. It provides the soul with bodies (Śarīra), instruments (Karaṇa), and worlds (Bhuvana) for experience. Unlike Advaita, Maya here is <strong>not illusion</strong> but a real creative power of Shiva.</li>
+              <li><strong>Kārma Mala (कार्म मल)</strong> — The impurity of accumulated karma. The residue of actions (Puṇya and Pāpa) that binds the soul to the cycle of rebirth. Karma determines the specific body, life-circumstances, and experiences of each birth.</li>
+            </ul>
+          </div>
+
+          <h4 className="font-display font-semibold text-ink mt-4 mb-2">Liberation: Śiva-Sāyujya (शिव-सायुज्य)</h4>
+          <p>The ultimate goal described in the Chintyāgama is <strong>Śiva-sāyujya</strong> — intimate union with Shiva. This is not merger or dissolution of the soul (as in Advaita's Jīvan-mukti), but rather the soul <strong>attaining Shiva's qualities</strong> (omniscience, omnipotence, bliss) while retaining its individual identity. The liberated soul becomes <strong>"like Shiva but not Shiva himself"</strong> — enjoying all of Shiva's powers through His grace.</p>
+
+          <Verse
+            sanskrit="पतिः पशुपतिः शम्भुः पाशं मोचयते सदा ।
+ज्ञानेन कर्मणा भक्त्या शिवसायुज्यमाप्नुयात् ॥"
+            transliteration="Patiḥ paśupatiḥ śambhuḥ pāśaṃ mocayate sadā | Jñānena karmaṇā bhaktyā śivasāyujyamāpnuyāt ||"
+            meaning="The Lord, Pashupati Shambhu, ever liberates from bondage. Through knowledge, action, and devotion, one attains Shiva-Sayujya (union with Shiva)."
+          />
+        </Section>
+
+        <SectionDivider className="my-8" />
+
+        {/* ===== SECTION 3: CORE VERSES ===== */}
+        <Section id="verses" title="3. Core Verses & Philosophical Highlights" hindiTitle="३. मुख्य श्लोक एवं दार्शनिक विशेषताएँ">
+          <Verse
+            sanskrit="चिन्त्यं चिन्तामणिं देवं चिदानन्दस्वरूपिणम् ।
+चिन्तयेत् सततं भक्त्या चिन्त्यागमपरायणः ॥"
+            transliteration="Chintyaṃ cintāmaṇiṃ devaṃ cidānandasvarūpiṇam | Cintayet satataṃ bhaktyā chintyāgamaparāyaṇaḥ ||"
+            meaning="One devoted to the Chintyagama should constantly contemplate with devotion the Lord who is to be contemplated (Chintya), who is the wish-fulfilling gem (Chintamani), who is of the nature of consciousness and bliss (Chidananda)."
+          />
+
+          <Verse
+            sanskrit="शिवज्ञानं परं ज्ञानं शिवध्यानं परं तपः ।
+शिवपूजा परा पूजा शिवभक्तिः परा गतिः ॥"
+            transliteration="Śivajñānaṃ paraṃ jñānaṃ śivadhyānaṃ paraṃ tapaḥ | Śivapūjā parā pūjā śivabhaktiḥ parā gatiḥ ||"
+            meaning="Knowledge of Shiva is the supreme knowledge. Meditation on Shiva is the supreme austerity. Worship of Shiva is the supreme worship. Devotion to Shiva is the supreme goal."
+          />
+
+          <Verse
+            sanskrit="आगमोक्तविधानेन यः पूजयति शङ्करम् ।
+स याति परमं स्थानं यत्र गत्वा न शोचति ॥"
+            transliteration="Āgamoktavidhānena yaḥ pūjayati śaṅkaram | Sa yāti paramaṃ sthānaṃ yatra gatvā na śocati ||"
+            meaning="He who worships Shankara according to the methods prescribed in the Agamas reaches the supreme abode, having reached which one grieves no more."
+          />
+
+          <Verse
+            sanskrit="मलत्रयविनिर्मुक्तः शिवशक्तिसमन्वितः ।
+पशुपाशविनिर्मुक्तो जीवः शिवसमो भवेत् ॥"
+            transliteration="Malatrayavinirmuktaḥ śivaśaktisamanvitaḥ | Paśupāśavinirmukto jīvaḥ śivasamo bhavet ||"
+            meaning="Freed from the three Malas, endowed with Shiva's Shakti, liberated from the bonds of Pashu — the soul becomes equal to Shiva."
+          />
+        </Section>
+
+        <SectionDivider className="my-8" />
+
+        {/* ===== SECTION 4: 36 TATTVAS ===== */}
+        <Section id="tattvas" title="4. The 36 Tattvas According to Chintyāgama" hindiTitle="४. चिन्त्यागम के अनुसार ३६ तत्त्व">
+          <p>The Chintyāgama presents the most detailed exposition of the <strong>Ṣaṭtriṃśat Tattva</strong> (36 categories of existence) — the complete ontological framework of Shaiva Siddhanta. These 36 Tattvas describe the entire spectrum of reality from pure consciousness (Shiva) to gross matter (Earth), explaining how the infinite becomes apparently finite and how the bound soul can trace its way back to liberation.</p>
+          <TattvaTable />
+        </Section>
+
+        <SectionDivider className="my-8" />
+
+        {/* ===== SECTION 5: CONCLUSION ===== */}
+        <Section id="conclusion" title="5. Conclusion & Accessibility" hindiTitle="५. उपसंहार एवं पहुँच">
+          <h4 className="font-display font-semibold text-ink mt-2 mb-2">The Unique Ethos of Chintyāgama</h4>
+          <p>The Chintyāgama occupies a distinctive position among the twenty-eight Shaiva Āgamas by <strong>harmonizing two seemingly opposite impulses</strong>:</p>
+          <ul className="list-disc pl-6 space-y-2">
+            <li><strong>Rigorous Metaphysical Contemplation (Chintya)</strong> — Its very name demands deep philosophical reflection on the nature of Shiva, the soul, and bondage. The Jñāna and Yoga Pādas provide sophisticated frameworks for inner realization.</li>
+            <li><strong>Robust Communal Temple Culture</strong> — The Kriyā and Caryā Pādas establish comprehensive protocols for community worship, ensuring that the highest philosophy is accessible through collective ritual participation.</li>
+          </ul>
+          <p className="mt-3">This balance makes the Chintyāgama particularly relevant for the modern era — it affirms that <strong>philosophical depth need not be divorced from devotional practice</strong>, and that <strong>temple worship is not mere ritualism but a sophisticated technology for spiritual transformation</strong>.</p>
+
+          <h4 className="font-display font-semibold text-ink mt-6 mb-2">Where to Access Primary Sources</h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+            {[
+              { name: 'French Institute of Indology (IFP), Pondicherry', desc: 'The premier repository of Shaiva Agama manuscripts. Houses critical editions of most Agamas including Chintyagama fragments. The Shaiva Agama publication series (ed. N.R. Bhatt, Jean Filliozat, S.P. Sabharathnam Sivacharyar).', url: 'https://www.ifpindia.org' },
+              { name: 'Himalayan Academy, Hawaii', desc: 'Publisher of comprehensive Shaiva Siddhanta resources. \"Dancing with Shiva\" by Satguru Sivaya Subramuniyaswami provides accessible introduction to Agamic concepts.', url: 'https://www.himalayanacademy.com' },
+              { name: 'IGNCA (Indira Gandhi National Centre for the Arts)', desc: 'Digital repository of rare manuscripts. Kalāmūlaśāstra series includes Agamic texts on architecture and iconography.', url: 'https://ignca.gov.in' },
+              { name: 'Shaiva Agama Research Centre, Chennai', desc: 'Dedicated to preservation, publication, and teaching of Shaiva Agamas. Conducts training for temple priests in Agamic rituals.', url: 'https://shaivam.org' },
+              { name: 'Oriental Research Institute, Mysore', desc: 'Houses palm-leaf manuscripts of several Shaiva Agamas. Published critical editions through the Oriental Research Institute series.', url: 'https://ori.uni-mysore.ac.in' },
+              { name: 'Muktabodha Indological Research Institute', desc: 'Digital library of Shaiva and Tantric manuscripts. Searchable database of Agamic texts in Devanagari and Grantha scripts.', url: 'https://muktabodha.org' },
+            ].map(s => (
+              <a key={s.name} href={s.url} target="_blank" rel="noopener noreferrer" className="block p-4 bg-surface border border-border rounded-lg hover:border-vermillion/30 transition-colors">
+                <p className="font-display font-semibold text-ink text-sm">{s.name}</p>
+                <p className="text-ink-faint text-[12px] mt-1 leading-relaxed">{s.desc}</p>
+              </a>
+            ))}
+          </div>
+
+          <Verse
+            sanskrit="ॐ नमः शिवाय ।
+चिन्त्यागमं समाश्रित्य शिवज्ञानं प्रकाशते ।
+पशुपाशविमुक्त्यर्थं शिवसायुज्यसिद्धये ॥"
+            transliteration="Oṃ Namaḥ Śivāya | Chintyāgamaṃ samāśritya śivajñānaṃ prakāśate | Paśupāśavimuktryarthaṃ śivasāyujyasiddhaye ||"
+            meaning="Om Namah Shivaya. Taking refuge in the Chintyagama, the knowledge of Shiva illuminates — for the purpose of liberation from the bonds of the Pashu, for the attainment of union with Shiva."
+          />
+        </Section>
+      </div>
+    </div>
+  );
+}
+
+
+========================================
+FILE: src/pages/GranthSuchiPage.tsx
+========================================
+
+import { useState } from 'react';
+import { BookOpen, ChevronDown, ChevronUp, ExternalLink, ArrowLeft, Volume2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { t } from '../lib/translations';
+import AudioPlayer from '../components/AudioPlayer';
+import SectionDivider from '../components/SectionDivider';
+import { getScriptureDetail, type ScriptureDetail } from '../lib/scripture-details';
+
+interface ScriptureEntry {
+  name: string;
+  shlokas: string;
+  author: string;
+  period: string;
+  teachings: string;
+}
+
+interface Category {
+  id: string;
+  title: string;
+  subtitle: string;
+  description: string;
+  color: string;
+  entries: ScriptureEntry[];
+  sources: string[];
+}
+
+/* ============ SCRIPTURE DETAIL VIEW ============ */
+function ScriptureDetailView({ detail, language, onBack }: { detail: ScriptureDetail; language: string; onBack: () => void }) {
+  return (
+    <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="max-w-4xl mx-auto">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-ink-muted hover:text-vermillion text-sm transition-colors mb-6">
+        <ArrowLeft size={15} /> Back to ग्रन्थ सूची
+      </button>
+
+      {/* Header */}
+      <div className="text-center mb-8">
+        <span className="px-3 py-1 rounded-full bg-vermillion/8 text-vermillion text-[11px] font-semibold uppercase tracking-wider">{detail.category}</span>
+        <h1 className="font-display text-3xl md:text-4xl font-bold text-ink mt-3">{detail.name}</h1>
+        <p className="font-devanagari text-xl text-vermillion mt-1">{detail.sanskrit}</p>
+        <p className="text-ink-faint text-sm mt-2">{detail.shlokas} · {detail.author}</p>
+        <p className="text-ink-faint text-xs mt-1">{detail.period}</p>
+      </div>
+
+      {/* Audio */}
+      <div className="mb-6">
+        <AudioPlayer
+          text={`${detail.name}. ${detail.fullDescription.substring(0, 800)}`}
+          language={language}
+          title={`${detail.name} — Complete Audio Guide`}
+        />
+      </div>
+
+      {/* Full Description */}
+      <div className="bg-surface border border-border rounded-xl p-6 mb-6">
+        <h2 className="font-display text-lg font-semibold text-ink mb-3 flex items-center gap-2">
+          <BookOpen size={18} className="text-vermillion" /> Description & Background
+        </h2>
+        {detail.fullDescription.split('\n\n').map((para, i) => (
+          <p key={i} className="text-ink-light text-[15px] leading-relaxed mb-3">{para}</p>
+        ))}
+      </div>
+
+      {/* Structure */}
+      <div className="bg-surface border border-border rounded-xl p-6 mb-6">
+        <h2 className="font-display text-lg font-semibold text-ink mb-3">Structure & Organization</h2>
+        {detail.structure.split('\n\n').map((para, i) => (
+          <div key={i} className="mb-3">
+            {para.split('\n').map((line, j) => (
+              <p key={j} className={`text-[14px] leading-relaxed ${line.startsWith('•') || line.startsWith('1') || line.startsWith('2') || line.startsWith('3') || line.startsWith('4') || line.startsWith('5') || line.startsWith('6') || line.startsWith('7') || line.startsWith('8') || line.startsWith('9') ? 'text-ink-light ml-4' : 'text-ink font-medium'}`}>
+                {line}
+              </p>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      {/* Philosophy */}
+      <div className="bg-surface border border-border rounded-xl p-6 mb-6">
+        <h2 className="font-display text-lg font-semibold text-ink mb-3">Philosophy & Core Teachings</h2>
+        {detail.philosophy.split('\n\n').map((para, i) => (
+          <div key={i} className="mb-3">
+            {para.split('\n').map((line, j) => (
+              <p key={j} className={`text-[14px] leading-relaxed ${line.startsWith('•') ? 'text-ink-light ml-4 mb-1' : 'text-ink-light'}`}>
+                {line}
+              </p>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      {/* Key Verses */}
+      {detail.keyVerses.length > 0 && (
+        <div className="mb-6">
+          <h2 className="font-display text-lg font-semibold text-ink mb-4">Key Verses (मुख्य श्लोक)</h2>
+          <div className="space-y-4">
+            {detail.keyVerses.map((verse, i) => (
+              <div key={i} className="bg-parchment-warm border border-border rounded-xl p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <p className="font-devanagari text-ink text-[15px] leading-relaxed mb-2">{verse.sanskrit}</p>
+                    <p className="text-ink-light text-sm leading-relaxed">{verse.meaning}</p>
+                  </div>
+                  <AudioPlayer text={verse.sanskrit + '. ' + verse.meaning} language={language} compact />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Access Links */}
+      <div className="bg-surface border border-border rounded-xl p-6 mb-6">
+        <h2 className="font-display text-lg font-semibold text-ink mb-3">Where to Read / Access</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {detail.accessLinks.map((link, i) => (
+            <a key={i} href={link.url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border hover:border-vermillion/30 hover:bg-vermillion/3 transition-colors">
+              <ExternalLink size={13} className="text-vermillion flex-shrink-0" />
+              <span className="text-ink text-sm font-medium">{link.name}</span>
+            </a>
+          ))}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+/* ============ CATEGORY SECTION ============ */
+function CategorySection({ cat, language, defaultOpen, onSelectScripture }: { cat: Category; language: string; defaultOpen?: boolean; onSelectScripture: (name: string) => void }) {
+  const [open, setOpen] = useState(defaultOpen || false);
+  return (
+    <div className="bg-surface border border-border rounded-xl overflow-hidden mb-4">
+      <button onClick={() => setOpen(!open)} className={`w-full text-left px-5 py-4 flex items-start gap-4 hover:bg-parchment/40 transition-colors border-l-4 ${cat.color}`}>
+        <div className="flex-1 min-w-0">
+          <h2 className="font-display text-lg md:text-xl font-bold text-ink">{cat.title}</h2>
+          <p className="text-ink-faint text-sm mt-0.5">{cat.subtitle}</p>
+        </div>
+        <div className="flex-shrink-0 mt-1 text-ink-faint">{open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</div>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.3 }} className="overflow-hidden">
+            <div className="px-5 pb-5 border-t border-border-light pt-4 space-y-5">
+              <AudioPlayer text={`${cat.title}. ${cat.description}`} language={language} title={cat.title} />
+              <p className="text-ink-light text-sm leading-relaxed">{cat.description}</p>
+              {/* Clickable entries */}
+              <div className="space-y-2">
+                {cat.entries.map((e, i) => {
+                  const hasDetail = !!getScriptureDetail(e.name);
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => hasDetail && onSelectScripture(e.name)}
+                      className={`border border-border rounded-lg p-4 transition-all ${hasDetail ? 'cursor-pointer hover:border-vermillion/40 hover:shadow-sm hover:bg-vermillion/[0.02] group' : ''}`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className={`font-display text-[15px] font-semibold ${hasDetail ? 'text-ink group-hover:text-vermillion transition-colors' : 'text-ink'}`}>
+                              {e.name}
+                            </h3>
+                            {hasDetail && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-vermillion/10 text-vermillion uppercase tracking-wider">
+                                Detailed
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-ink-faint text-[12px] mt-0.5">{e.shlokas} · {e.author} · {e.period}</p>
+                          <p className="text-ink-light text-[13px] mt-1.5 leading-snug">{e.teachings}</p>
+                        </div>
+                        {hasDetail && (
+                          <span className="text-vermillion/40 group-hover:text-vermillion transition-colors flex-shrink-0 mt-1">
+                            <BookOpen size={16} />
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Sources */}
+              <div>
+                <h4 className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint mb-2">Where to Access (Legal / Open-Source)</h4>
+                <div className="flex flex-wrap gap-2">
+                  {cat.sources.map((s, i) => (
+                    <a key={i} href={s.startsWith('http') ? s : `https://${s}`} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-parchment-warm border border-border text-ink-muted text-[12px] hover:border-vermillion/30 hover:text-vermillion transition-colors">
+                      <ExternalLink size={10} /> {s.replace('https://', '').replace('http://', '').split('/')[0]}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ============ CATEGORIES DATA ============ */
+const CATEGORIES: Category[] = [
+  {
+    id: 'vedas',
+    title: 'The Four Vedas (चतुर्वेद)',
+    subtitle: 'Samhitas, Brahmanas, Aranyakas & Principal Upanishads',
+    color: 'border-l-vermillion',
+    description: 'The Vedas are the oldest scriptures of Sanatan Dharma, regarded as Apaurusheya (not of human origin) and Shruti (that which is heard). They were revealed to ancient Rishis during deep meditation and transmitted orally for millennia before being compiled by Veda Vyasa. Each Veda has four layers: Samhita (hymns/mantras), Brahmana (ritual commentary), Aranyaka (forest treatises), and Upanishad (philosophical conclusions). Together they contain approximately 20,379+ mantras across all Samhitas.',
+    entries: [
+      { name: 'Rigveda', shlokas: '10,552 mantras in 1,028 Suktas', author: 'Various Rishis (Vishvamitra, Vasishtha, etc.)', period: 'c. 1500–1200 BCE', teachings: 'Hymns to Agni, Indra, Varuna, Surya. Foundation of Vedic cosmology. Nasadiya Sukta, Purusha Sukta. Oldest religious text in continuous use.' },
+      { name: 'Yajurveda', shlokas: '~4,000 mantras (Shukla + Krishna)', author: 'Vaishampayana, Yajnavalkya', period: 'c. 1200–900 BCE', teachings: 'Sacrificial formulas for yajnas. Two recensions: Shukla and Krishna. Contains Shatapatha Brahmana and Brihadaranyaka Upanishad.' },
+      { name: 'Samaveda', shlokas: '1,875 mantras set to musical notation', author: 'Jaimini (traditional)', period: 'c. 1200–900 BCE', teachings: 'The Veda of melodies (Saman). Origin of Indian classical music. Krishna: "Among Vedas, I am Samaveda." Contains Chandogya and Kena Upanishads.' },
+      { name: 'Atharvaveda', shlokas: '5,977 mantras in 730 Suktas', author: 'Atharvan and Angiras Rishis', period: 'c. 1000–900 BCE', teachings: 'Hymns for healing, daily life, statecraft. Prithvi Sukta, marriage hymns. Includes Mundaka, Mandukya, Prashna Upanishads.' },
+      { name: 'Isha Upanishad', shlokas: '18 mantras', author: 'Anonymous Rishi', period: 'c. 800–500 BCE', teachings: 'Opening Upanishad of Shukla Yajurveda. "Ishavasyam idam sarvam" — all this is pervaded by the Lord.' },
+      { name: 'Katha Upanishad', shlokas: '119 mantras in 6 Vallis', author: 'Anonymous', period: 'c. 800–500 BCE', teachings: 'Dialogue between Nachiketa and Yama. Nature of Atman, immortality, the chariot metaphor.' },
+      { name: 'Chandogya Upanishad', shlokas: '154 Khandas in 8 Prapathakas', author: 'Anonymous', period: 'c. 800–600 BCE', teachings: '"Tat Tvam Asi" — Thou art That. Uddalaka teaches Shvetaketu. Meditation on Om, Prana.' },
+      { name: 'Brihadaranyaka Upanishad', shlokas: '~435 mantras, largest Upanishad', author: 'Yajnavalkya (primary teacher)', period: 'c. 700–600 BCE', teachings: '"Aham Brahmasmi." Yajnavalkya-Maitreyi dialogue. Neti-neti method. Most philosophically dense Upanishad.' },
+      { name: 'Mundaka Upanishad', shlokas: '64 mantras in 3 Mundakas', author: 'Anonymous', period: 'c. 500 BCE', teachings: 'Para and Apara Vidya. "Satyameva Jayate" — India\'s national motto originates here.' },
+      { name: 'Mandukya Upanishad', shlokas: '12 mantras (shortest major Upanishad)', author: 'Anonymous', period: 'c. 500 BCE', teachings: 'Analysis of AUM. Four states of consciousness: waking, dream, deep sleep, Turiya.' },
+    ],
+    sources: ['https://archive.org/details/rigvedacompletebooks', 'https://sacred-texts.com/hin/rigveda/', 'https://www.wisdomlib.org/hinduism', 'https://gitapress.org', 'https://sa.wikisource.org'],
+  },
+  {
+    id: 'upavedas', title: 'The Four Upavedas (उपवेद)', subtitle: 'Applied Knowledge Systems derived from the Vedas', color: 'border-l-sage',
+    description: 'The Upavedas ("subsidiary Vedas") are applied sciences traditionally attached to each of the four Vedas. They represent the practical application of Vedic knowledge to medicine, warfare, music/arts, and architecture.',
+    entries: [
+      { name: 'Ayurveda (आयुर्वेद)', shlokas: 'Charaka: ~8,400; Sushruta: ~6,000; Ashtanga Hridaya: ~7,120', author: 'Charaka, Sushruta, Vagbhata', period: 'c. 600 BCE – 600 CE', teachings: 'Science of life. Tridosha theory, surgery, Panchakarma, herbal medicine, Rasayana.' },
+      { name: 'Dhanurveda (धनुर्वेद)', shlokas: '~300 verses; also in Agni Purana ch. 248–258', author: 'Vishvamitra, Parashurama', period: 'c. 500 BCE – 500 CE', teachings: 'Science of warfare. Archery, weapons (astras/shastras), military formations, ethics of war.' },
+      { name: 'Gandharvaveda (गन्धर्ववेद)', shlokas: 'Natyashastra: 6,000 shlokas; Sangita Ratnakara: ~1,600', author: 'Bharata Muni, Sharngadeva', period: 'c. 200 BCE – 200 CE', teachings: 'Music, dance, performing arts. 22 Shrutis, Ragas, Talas, Rasa theory. Natyashastra = "Fifth Veda."' },
+      { name: 'Sthapatyaveda (स्थापत्यवेद)', shlokas: 'Manasara: ~7,000; Mayamata: ~4,500', author: 'Vishvakarma, Maya', period: 'c. 500 BCE – 700 CE', teachings: 'Architecture, sculpture, Vastu Shastra. Temple design, town planning, sacred geometry.' },
+    ],
+    sources: ['https://archive.org/details/CharakaSamhita', 'https://archive.org/details/natyashastra', 'https://www.wisdomlib.org/definition/upaveda', 'https://gitapress.org'],
+  },
+  {
+    id: 'puranas', title: 'The 18 Mahapuranas (अष्टादश महापुराण)', subtitle: 'Total: ~4,00,000 shlokas — Encyclopedias of Dharma, History & Cosmology', color: 'border-l-turmeric',
+    description: 'The 18 Mahapuranas are traditionally authored by Veda Vyasa. They are classified into three groups: Sattva (Vishnu), Rajas (Brahma), and Tamas (Shiva). Each covers Pancha Lakshana: Sarga, Pratisarga, Vamsha, Manvantara, and Vamshanucharita.',
+    entries: [
+      { name: 'Bhagavata Purana (Srimad Bhagavatam)', shlokas: '18,000 in 12 Skandhas', author: 'Vyasa', period: 'c. 500–900 CE', teachings: 'Supreme Vaishnava text. Complete Krishna Lila. Bhakti as highest path. Prahlada, Dhruva, Uddhava Gita.' },
+      { name: 'Vishnu Purana', shlokas: '23,000', author: 'Parashara', period: 'c. 1st century BCE – 4th CE', teachings: 'Most systematic Vaishnava Purana. Six Amshas: cosmology, genealogies, Krishna Lila, Kaliyuga prophecies.' },
+      { name: 'Shiva Purana', shlokas: '24,000', author: 'Vyasa', period: 'c. 400–1000 CE', teachings: 'Seven Samhitas. Origin of 12 Jyotirlingas, Shiva-Parvati marriage, Panchakshara mantra.' },
+      { name: 'Brahma Purana', shlokas: '10,000', author: 'Vyasa', period: 'c. 900–1000 CE', teachings: 'Creation account, Purushottama Kshetra (Puri), Sun worship.' },
+      { name: 'Padma Purana', shlokas: '55,000', author: 'Vyasa', period: 'c. 400–1500 CE', teachings: 'Five Khandas. Glorification of Vishnu, Tulsi plant, Ekadashi vrata.' },
+      { name: 'Skanda Purana', shlokas: '81,100 (largest Purana)', author: 'Vyasa', period: 'c. 600–1400 CE', teachings: 'Seven Khandas covering major pilgrimage sites. Kashi Khanda. Birth of Kartikeya.' },
+      { name: 'Markandeya Purana', shlokas: '9,000', author: 'Vyasa/Markandeya', period: 'c. 250–500 CE', teachings: 'Contains Devi Mahatmyam (700 shlokas) — supreme Shakta text. Durga vs Mahishasura.' },
+      { name: 'Garuda Purana', shlokas: '19,000 in 2 Khandas', author: 'Vyasa', period: 'c. 800–1100 CE', teachings: 'Afterlife, funeral rites, Yama\'s judgment. Read during Hindu funeral rites.' },
+      { name: 'Agni Purana', shlokas: '15,400 in 383 chapters', author: 'Vyasa', period: 'c. 700–1100 CE', teachings: 'Encyclopedic: grammar, medicine, warfare, iconography, all Avatars of Vishnu.' },
+      { name: 'Narada Purana', shlokas: '25,000', author: 'Vyasa', period: 'c. 900–1000 CE', teachings: 'Festivals, vratas, tirthas. Summary of all 18 Puranas within itself.' },
+      { name: 'Matsya Purana', shlokas: '14,000', author: 'Vyasa', period: 'c. 250–500 CE', teachings: 'Vishnu as Matsya saving Manu. Temple architecture, iconography, Pralaya.' },
+      { name: 'Kurma Purana', shlokas: '17,000', author: 'Vyasa', period: 'c. 600–900 CE', teachings: 'Vishnu as Kurma. Samudra Manthana. Ishvara Gita. Lakshmi Mahatmya.' },
+      { name: 'Linga Purana', shlokas: '11,000', author: 'Vyasa', period: 'c. 500–1000 CE', teachings: '28 Avatars of Shiva. Yoga and Pashupata philosophy. Origin of Linga worship.' },
+      { name: 'Brahmanda Purana', shlokas: '12,000', author: 'Vyasa', period: 'c. 400–600 CE', teachings: 'Cosmic egg cosmology. Contains Lalita Sahasranama and Adhyatma Ramayana.' },
+      { name: 'Brahmavaivarta Purana', shlokas: '18,000', author: 'Vyasa', period: 'c. 700–1400 CE', teachings: 'Krishna-Radha theology. Prakriti Khanda, Ganapati Khanda.' },
+      { name: 'Varaha Purana', shlokas: '24,000', author: 'Vyasa', period: 'c. 900–1100 CE', teachings: 'Vishnu as Varaha rescuing Earth. Mathura Mahatmya, Vratas.' },
+      { name: 'Vamana Purana', shlokas: '10,000', author: 'Vyasa', period: 'c. 900–1100 CE', teachings: 'Vamana Avatar and King Bali. Tirtha Mahatmyas.' },
+      { name: 'Bhavishya Purana', shlokas: '14,500', author: 'Vyasa', period: 'c. 500–1900 CE', teachings: 'Prophecies, Sun worship, vratas, Dharmashastra.' },
+    ],
+    sources: ['https://archive.org/details/puranam', 'https://www.wisdomlib.org/hinduism/book/the-vishnu-purana', 'https://sacred-texts.com/hin/', 'https://gitapress.org'],
+  },
+  {
+    id: 'devi', title: 'Devi / Shakta Literature (देवी साहित्य)', subtitle: 'Devi Bhagavata, Devi Mahatmyam, Soundarya Lahari & Tantric Texts', color: 'border-l-lotus',
+    description: 'Shakta literature glorifies the Divine Feminine (Devi/Shakti) as the Supreme Reality. The Devi Bhagavata Purana is the Shakta equivalent of the Bhagavata Purana.',
+    entries: [
+      { name: 'Devi Bhagavata Purana', shlokas: '18,000 in 12 Skandhas', author: 'Vyasa', period: 'c. 600–1200 CE', teachings: 'Supreme Shakta Purana. Devi as Para Brahman. Devi Gita. Shakti Peethas, Navaratri origin.' },
+      { name: 'Devi Mahatmyam', shlokas: '700 shlokas in 13 chapters', author: 'Markandeya', period: 'c. 400–600 CE', teachings: 'Three Charitras: Madhu-Kaitabha, Mahishasura Mardini, Shumbha-Nishumbha. Recited during Navaratri.' },
+      { name: 'Lalita Sahasranama', shlokas: '1,000 names in 182.5 shlokas', author: 'Hayagriva (Brahmanda Purana)', period: 'c. 400–800 CE', teachings: '1,000 names of Lalita Tripurasundari. Srividya philosophy. Shri Chakra symbolism.' },
+      { name: 'Soundarya Lahari', shlokas: '103 shlokas', author: 'Adi Shankaracharya', period: 'c. 8th century CE', teachings: 'Supreme hymn of beauty. Kundalini, Shri Chakra, Tantric cosmology. Each verse = yantra + mantra.' },
+      { name: 'Tantraraja Tantra', shlokas: '~3,600 shlokas in 36 chapters', author: 'Revealed by Shiva', period: 'c. 1000–1400 CE', teachings: 'Comprehensive Srividya Tantra. Shri Chakra worship, Kundalini, mantra science, diksha.' },
+    ],
+    sources: ['https://archive.org/details/devi-bhagavata-purana', 'https://sacred-texts.com/hin/devi/', 'https://gitapress.org', 'https://www.wisdomlib.org/hinduism/book/devi-mahatmyam'],
+  },
+  {
+    id: 'agamas', title: 'Agamas & Tantras (आगम और तन्त्र)', subtitle: 'Shaiva (28), Vaishnava/Pancharatra (108), Shakta (64) Agamas', color: 'border-l-vermillion',
+    description: 'The Agamas form the basis of temple worship, iconography, and ritual practice. Each covers four padas: Jnana, Yoga, Kriya, and Charya.',
+    entries: [
+      { name: 'Kamika Agama (Shaiva)', shlokas: '~12,000', author: 'Revealed by Sadashiva', period: 'c. 500–1000 CE', teachings: 'Foremost Shaiva Agama. Temple construction, daily worship, festivals. Basis of South Indian Shaiva temple worship.' },
+      { name: 'Pancharatra Samhitas', shlokas: 'Jayakhya: ~4,500; Ahirbudhnya: ~3,600', author: 'Revealed by Narayana', period: 'c. 300–1200 CE', teachings: 'Basis of Vaishnava temple worship. Vyuha forms. 108 Samhitas traditionally listed.' },
+      { name: 'Vaikhanasa Agama', shlokas: '~5,000', author: 'Vikhanas Rishi', period: 'c. 400–800 CE', teachings: 'Alternative Vaishnava system. Basis of Tirumala worship. Vedic fire rituals + temple worship.' },
+      { name: 'Shakta Tantras (64)', shlokas: 'Kularnava: ~2,058; Mahanirvana: ~1,200', author: 'Shiva to Parvati', period: 'c. 700–1400 CE', teachings: '64 Bhairava Tantras. Kundalini, Chakras, Mantras, Yantras, Mudras. Kaula practices.' },
+    ],
+    sources: ['https://archive.org/details/shaiva-agamas', 'https://www.wisdomlib.org/hinduism/book/the-pancharatra', 'https://sacred-texts.com/tantra/', 'https://shaivam.org'],
+  },
+  {
+    id: 'itihasas', title: 'Itihasas — The Great Epics (इतिहास)', subtitle: 'Ramayana, Mahabharata & Bhagavad Gita', color: 'border-l-vermillion',
+    description: 'The two Itihasas are the greatest epics of world literature. Together they contain over 1,24,000 shlokas and form the moral and cultural foundation of Indian civilization.',
+    entries: [
+      { name: 'Valmiki Ramayana', shlokas: '24,000 shlokas in 7 Kandas', author: 'Maharishi Valmiki', period: 'c. 500–300 BCE', teachings: 'Life of Lord Rama — ideal king, husband, son. Dharma in every relationship. First kavya in Sanskrit.' },
+      { name: 'Mahabharata', shlokas: '~1,00,000 shlokas in 18 Parvas', author: 'Veda Vyasa', period: 'c. 400 BCE – 400 CE', teachings: 'Longest epic. Kurukshetra War. Contains Bhagavad Gita, Vishnu Sahasranama, encyclopedic knowledge.' },
+      { name: 'Bhagavad Gita', shlokas: '700 shlokas in 18 Adhyayas', author: 'Vyasa (spoken by Krishna)', period: 'Within Mahabharata, Bhishma Parva', teachings: 'Supreme dialogue. Karma, Jnana, Bhakti Yoga. Atman, Dharma, Vishvarupa. Most translated Indian text.' },
+      { name: 'Tulsidas Ramcharitmanas', shlokas: '10,902 chaupais + dohas', author: 'Goswami Tulsidas', period: '1574–1576 CE', teachings: 'Awadhi retelling of Ramayana. Most popular in North India. Bhakti-centered.' },
+      { name: 'Yoga Sutras', shlokas: '196 sutras in 4 Padas', author: 'Patanjali', period: 'c. 200 BCE – 400 CE', teachings: 'Foundation of Raja Yoga. Ashtanga Yoga. Chitta Vritti Nirodha. Path to Samadhi.' },
+    ],
+    sources: ['https://archive.org/details/valmiki-ramayana', 'https://sacred-texts.com/hin/maha/', 'https://www.gitasupersite.iitk.ac.in', 'https://gitapress.org'],
+  },
+  {
+    id: 'stotras', title: 'Stotras & Sahasranamas (स्तोत्र)', subtitle: 'Sacred Hymns, 1000-Name Litanies & Devotional Compilations', color: 'border-l-turmeric',
+    description: 'Stotras are devotional hymns by great Acharyas. Sahasranamas are powerful 1,000-name invocations. These form the daily worship of millions.',
+    entries: [
+      { name: 'Vishnu Sahasranama', shlokas: '142 shlokas / 1,000 names', author: 'Bhishma (Mahabharata)', period: 'Within Mahabharata', teachings: '1,000 names of Vishnu. Commentaries by Shankara, Parasara Bhattar, Madhva.' },
+      { name: 'Lalita Sahasranama', shlokas: '182.5 shlokas / 1,000 names', author: 'Brahmanda Purana', period: 'c. 400–800 CE', teachings: '1,000 names of Lalita. Srividya philosophy. Shri Chakra, Kundalini.' },
+      { name: 'Vivekachudamani', shlokas: '580 shlokas', author: 'Adi Shankaracharya', period: '8th century CE', teachings: 'Crest-jewel of discrimination. Advaita Vedanta primer. Atman-Brahman identity.' },
+      { name: 'Hanuman Chalisa', shlokas: '40 chaupais + 2 dohas', author: 'Tulsidas', period: '16th century CE', teachings: 'Most recited Hindu prayer globally. Hanuman\'s strength, devotion, service to Rama.' },
+      { name: 'Soundarya Lahari', shlokas: '103 shlokas', author: 'Shankaracharya', period: '8th century CE', teachings: 'Beauty of Devi. Kundalini, Shri Chakra. Each verse is a yantra and mantra combined.' },
+      { name: 'Narayaneeyam', shlokas: '1,034 shlokas in 100 Dashakas', author: 'Melpathur Narayana Bhattathiri', period: '1586 CE', teachings: 'Condensed Bhagavata Purana. Composed at Guruvayur. All avatars of Vishnu.' },
+    ],
+    sources: ['https://stotranidhi.com', 'https://sacred-texts.com/hin/', 'https://gitapress.org', 'https://stotraratna.sathyasaithoughts.com'],
+  },
+];
+
+/* ============ MAIN PAGE ============ */
+export default function GranthSuchiPage({ language }: { language: string }) {
+  const [selectedScripture, setSelectedScripture] = useState<string | null>(null);
+
+  const detail = selectedScripture ? getScriptureDetail(selectedScripture) : null;
+
+  if (detail) {
+    return (
+      <div className="pt-6 pb-12 px-4">
+        <ScriptureDetailView detail={detail} language={language} onBack={() => setSelectedScripture(null)} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="pt-6 pb-12 px-4">
+      <div className="max-w-5xl mx-auto">
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-8">
+          <h1 className="font-display text-3xl md:text-4xl font-bold text-ink">ग्रन्थ सूची — Scripture Encyclopedia</h1>
+          <p className="text-ink-muted mt-1">Comprehensive reference guide to all major scriptures of Sanatan Dharma</p>
+          <p className="text-ink-faint text-sm mt-2">Click on any scripture marked <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-vermillion/10 text-vermillion uppercase">Detailed</span> to read its full description, key verses, and access links</p>
+        </motion.div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+          {[
+            { label: 'Vedic Texts', count: '13+', color: 'text-vermillion bg-vermillion/8' },
+            { label: 'Mahapuranas', count: '18', color: 'text-turmeric-deep bg-turmeric/8' },
+            { label: 'Agamas', count: '200+', color: 'text-lotus bg-lotus/8' },
+            { label: 'Total Shlokas', count: '5,00,000+', color: 'text-sage bg-sage/8' },
+          ].map(s => (
+            <div key={s.label} className={`rounded-lg p-3 text-center ${s.color}`}>
+              <p className="text-2xl font-display font-bold">{s.count}</p>
+              <p className="text-[12px] font-medium">{s.label}</p>
+            </div>
+          ))}
+        </div>
+
+        <SectionDivider className="mb-6" />
+
+        {CATEGORIES.map((cat, i) => (
+          <CategorySection key={cat.id} cat={cat} language={language} defaultOpen={i === 0} onSelectScripture={setSelectedScripture} />
+        ))}
+
+        {/* General sources */}
+        <div className="mt-8 bg-surface border border-border rounded-xl p-5">
+          <h3 className="font-display text-lg font-semibold text-ink mb-3">Universal Open-Source Access Points</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            {[
+              { name: 'Archive.org', url: 'https://archive.org/details/texts', desc: 'Largest digital library. Thousands of Sanskrit/Hindi texts.' },
+              { name: 'Sacred-Texts.com', url: 'https://sacred-texts.com/hin/', desc: 'Complete English translations of Vedas, Upanishads, Puranas, Epics.' },
+              { name: 'Wisdom Library', url: 'https://www.wisdomlib.org', desc: 'Encyclopedic reference with verse-by-verse commentary.' },
+              { name: 'Gita Press Gorakhpur', url: 'https://gitapress.org', desc: 'Most affordable printed editions in Hindi/Sanskrit.' },
+              { name: 'IIT Kanpur Gita Supersite', url: 'https://www.gitasupersite.iitk.ac.in', desc: 'Bhagavad Gita with all major commentaries.' },
+              { name: 'Stotra Nidhi', url: 'https://stotranidhi.com', desc: 'Comprehensive stotra collection in multiple scripts.' },
+            ].map(s => (
+              <a key={s.name} href={s.url} target="_blank" rel="noopener noreferrer" className="flex items-start gap-3 p-3 rounded-lg border border-border-light hover:border-vermillion/30 transition-colors">
+                <ExternalLink size={14} className="text-vermillion flex-shrink-0 mt-0.5" />
+                <div><p className="font-medium text-ink">{s.name}</p><p className="text-ink-faint text-[12px] mt-0.5">{s.desc}</p></div>
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+========================================
+FILE: src/pages/HomePage.tsx
+========================================
+
+import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { BookOpen, ScrollText, Navigation, ArrowRight, Download } from 'lucide-react';
+import { motion } from 'framer-motion';
+import SectionDivider from '../components/SectionDivider';
+import DharmaWheel from '../components/DharmaWheel';
+import { t } from '../lib/translations';
+
+export default function HomePage({ language = 'English' }: { language?: string }) {
+  const [stats, setStats] = useState({ books: 0, temples: 0, chapters: 0 });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([fetch('/api/books').then(r => r.json()), fetch('/api/temples').then(r => r.json())])
+      .then(([books, temples]) => { setStats({ books: books.length, temples: temples.length, chapters: books.reduce((s: number, b: any) => s + (b.total_chapters || 0), 0) }); })
+      .catch(console.error).finally(() => setLoading(false));
+  }, []);
+
+  const features = [
+    { icon: BookOpen, title: t('libTitle', language), desc: t('libDesc', language), link: '/library', cta: t('libCta', language) },
+    { icon: ScrollText, title: t('herTitle', language), desc: t('herDesc', language), link: '/heritage', cta: t('herCta', language) },
+    { icon: Navigation, title: t('trvTitle', language), desc: t('trvDesc', language), link: '/travel', cta: t('trvCta', language) },
+  ];
+
+  return (
+    <div className="min-h-screen">
+      {/* HERO */}
+      <section className="relative w-full overflow-hidden bg-cosmic-dark">
+        <div className="relative">
+          <img src="/hero-banner-6ca23dd6.png" alt="Sanatan Sanskriti" className="w-full h-auto block" />
+          <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-cosmic-dark to-transparent" />
+        </div>
+      </section>
+
+      {/* KAAL CHAKRA */}
+      <section className="relative bg-cosmic-dark py-16 md:py-24 overflow-hidden">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-cosmic-gold/[0.04] blur-[100px]" />
+        <div className="absolute inset-0 overflow-hidden">{Array.from({ length: 40 }).map((_, i) => (<div key={i} className="absolute rounded-full bg-cosmic-glow/30" style={{ width: `${1+Math.random()*2}px`, height: `${1+Math.random()*2}px`, top: `${Math.random()*100}%`, left: `${Math.random()*100}%` }} />))}</div>
+        <div className="relative z-10 max-w-3xl mx-auto px-4 text-center">
+          <motion.div initial={{ opacity: 0, scale: 0.5 }} whileInView={{ opacity: 1, scale: 1 }} transition={{ duration: 1.2 }} viewport={{ once: true }} className="flex justify-center mb-8">
+            <DharmaWheel size={140} spinning={true} color="#C9A84C" />
+          </motion.div>
+          <div className="min-h-[120px] flex flex-col items-center justify-center">
+            <h2 className="font-devanagari text-5xl md:text-7xl font-bold text-cosmic-glow tracking-wide samay-breathe">{t('mainSamay', language)}</h2>
+            <p className="font-display text-xl md:text-2xl text-cosmic-gold/80 italic mt-2 samay-breathe-delayed">{t('iAmTime', language)}</p>
+          </div>
+          <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ duration: 1, delay: 0.8 }} viewport={{ once: true }} className="mt-6">
+            <p className="font-devanagari text-cosmic-gold/50 text-sm">कालोऽस्मि लोकक्षयकृत्प्रवृद्धः</p>
+            <p className="text-cosmic-glow/35 text-xs mt-1">{t('gitaRef', language)}</p>
+            <p className="text-cosmic-glow/40 text-sm max-w-lg mx-auto leading-relaxed mt-4">{t('kaalDesc', language)}</p>
+          </motion.div>
+        </div>
+      </section>
+
+      {/* TEMPLE TAGLINE */}
+      <section className="relative bg-gradient-to-r from-cosmic-dark via-cosmic-navy to-cosmic-dark py-6 md:py-8 overflow-hidden border-t border-cosmic-gold/10">
+        <div className="relative z-10 max-w-4xl mx-auto px-4 text-center">
+          <motion.div initial={{ opacity: 0, y: 16 }} whileInView={{ opacity: 1, y: 0 }} transition={{ duration: 0.7 }} viewport={{ once: true }}>
+            <p className="text-cosmic-gold/60 text-[11px] tracking-[0.3em] uppercase font-medium mb-3">{t('templeTributeLabel', language)}</p>
+            <h2 className="font-display text-2xl md:text-3xl lg:text-4xl font-bold text-cosmic-glow leading-snug mb-3">{t('templeTributeTitle', language)}</h2>
+            <p className="font-devanagari text-cosmic-gold/70 text-base md:text-lg mb-4">{t('templeTributeSub', language)}</p>
+            <p className="text-cosmic-glow/50 text-sm max-w-2xl mx-auto leading-relaxed">{t('templeTributeDesc', language)}</p>
+            <div className="flex items-center justify-center gap-3 mt-6">
+              <Link to="/heritage" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-cosmic-gold/15 border border-cosmic-gold/30 text-cosmic-glow text-sm font-medium hover:bg-cosmic-gold/25 transition-colors"><ScrollText size={15} /> {t('exploreAllTemples', language)}</Link>
+              <Link to="/travel" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg border border-cosmic-glow/20 text-cosmic-glow/70 text-sm font-medium hover:border-cosmic-glow/40 hover:text-cosmic-glow transition-colors"><Navigation size={15} /> {t('planPilgrimage', language)}</Link>
+            </div>
+          </motion.div>
+        </div>
+      </section>
+
+      {/* STATS */}
+      <section className="py-8 border-b border-border bg-surface-warm">
+        <div className="max-w-4xl mx-auto px-4 grid grid-cols-3 gap-6">
+          {[{ num: stats.books, label: t('sacredTexts', language) }, { num: stats.temples, label: t('sacredSites', language) }, { num: 12, label: t('languages', language) }].map((stat, i) => (
+            <motion.div key={stat.label} initial={{ opacity: 0, y: 12 }} whileInView={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} viewport={{ once: true }} className="text-center">
+              <p className="font-display text-3xl md:text-4xl font-bold text-vermillion">{loading ? '—' : stat.num}</p>
+              <p className="text-ink-faint text-sm mt-1">{stat.label}</p>
+            </motion.div>
+          ))}
+        </div>
+      </section>
+
+      <SectionDivider className="my-12" />
+
+      {/* FEATURES */}
+      <section className="py-12 px-4">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-10">
+            <h2 className="font-display text-2xl md:text-3xl font-bold text-ink">{t('coreFeatures', language)}</h2>
+            <p className="text-ink-muted mt-2">{t('coreFeaturesDesc', language)}</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {features.map((f, i) => { const Icon = f.icon; return (
+              <motion.div key={f.title} initial={{ opacity: 0, y: 16 }} whileInView={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} viewport={{ once: true }}>
+                <Link to={f.link} className="block bg-surface border border-border rounded-xl p-6 hover:border-vermillion/30 hover:shadow-sm transition-all group h-full">
+                  <div className="w-10 h-10 rounded-lg bg-vermillion/8 flex items-center justify-center mb-4"><Icon size={20} className="text-vermillion" /></div>
+                  <h3 className="font-display text-lg font-semibold text-ink mb-2 group-hover:text-vermillion transition-colors">{f.title}</h3>
+                  <p className="text-ink-muted text-sm leading-relaxed mb-4">{f.desc}</p>
+                  <span className="text-vermillion text-sm font-medium flex items-center gap-1">{f.cta} <ArrowRight size={13} /></span>
+                </Link>
+              </motion.div>
+            ); })}
+          </div>
+        </div>
+      </section>
+
+      <SectionDivider className="my-8" />
+
+      {/* DOWNLOAD */}
+      <section className="py-12 px-4">
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-gradient-to-br from-cosmic-dark to-cosmic-navy rounded-2xl p-8 text-center border border-cosmic-gold/20">
+            <div className="flex justify-center mb-4"><DharmaWheel size={48} spinning={true} color="#C9A84C" /></div>
+            <h2 className="font-display text-2xl font-bold text-cosmic-glow mb-2">{t('downloadSource', language)}</h2>
+            <p className="text-cosmic-glow/50 text-sm mb-6 max-w-md mx-auto">{t('downloadDesc', language)}</p>
+            <a href="https://auwgmpuohewmlazmlcun.supabase.co/storage/v1/object/public/downloads/sanatan-sanskriti-source.zip" download="sanatan-sanskriti-source.zip" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2.5 px-7 py-3 rounded-xl bg-cosmic-gold/20 border border-cosmic-gold/40 text-cosmic-glow font-semibold text-sm hover:bg-cosmic-gold/30 transition-colors"><Download size={18} /> {t('downloadBtn', language)}</a>
+            <p className="text-cosmic-glow/30 text-[11px] mt-3">{t('downloadNote', language)}</p>
+          </div>
+        </div>
+      </section>
+
+      <SectionDivider className="my-8" />
+
+      {/* ADD BOOKS */}
+      <section className="py-12 px-4">
+        <div className="max-w-3xl mx-auto">
+          <h2 className="font-display text-2xl font-bold text-ink text-center mb-6">{t('addingBooks', language)}</h2>
+          <div className="bg-surface border border-border rounded-xl p-6">
+            <p className="text-ink-muted text-sm mb-4">{t('addBooksDesc', language)}</p>
+            <div className="space-y-3">
+              {(['step1','step2','step3','step4'] as const).map((key, i) => (
+                <div key={key} className="flex items-start gap-3">
+                  <span className="w-6 h-6 rounded-full bg-vermillion/10 text-vermillion text-[12px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5">{i+1}</span>
+                  <p className="text-ink-light text-sm">{t(key, language)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* FOOTER */}
+      <footer className="relative bg-cosmic-dark text-cosmic-glow/70 py-12 px-4 mt-8">
+        <div className="relative z-10 max-w-5xl mx-auto text-center">
+          <div className="flex justify-center mb-4"><DharmaWheel size={32} spinning={true} color="#C9A84C" /></div>
+          <p className="font-display text-cosmic-glow text-lg font-semibold">{t('sanatanSanskriti', language)}</p>
+          <p className="text-cosmic-glow/50 text-sm mt-1">{t('footerTagline', language)}</p>
+          <p className="font-devanagari text-cosmic-gold/50 text-xs mt-2 samay-fade">॥ मैं समय हूँ — कालोऽस्मि लोकक्षयकृत्प्रवृद्धोऽहम् ॥</p>
+          <div className="my-4 flex items-center justify-center gap-3"><div className="h-px w-16 bg-cosmic-gold/20" /><span className="text-cosmic-gold/40 text-xs">✦</span><div className="h-px w-16 bg-cosmic-gold/20" /></div>
+          <p className="text-cosmic-gold/40 text-xs font-devanagari">{t('footerShloka', language)}</p>
+          <p className="text-cosmic-glow/30 text-[11px] mt-2 italic">{t('footerShlokaEn', language)}</p>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+
+========================================
+FILE: src/pages/TravelPage.tsx
+========================================
+
+import { useState, useEffect, useMemo } from 'react';
+import { Navigation, MapPin, Train, Plane, Car, ExternalLink, Info, Route } from 'lucide-react';
+import { motion } from 'framer-motion';
+import AudioPlayer from '../components/AudioPlayer';
+import LoadingSpinner from '../components/LoadingSpinner';
+import { t } from '../lib/translations';
+
+interface Temple { id: number; name: string; hindi_name: string; type: string; state: string; city: string; latitude: number; longitude: number; description: string; significance: string; deity: string; }
+interface RouteInfo { road: { distance: string; duration: string; steps: string[] }; train: { stations: string[]; tips: string[] }; flight: { airports: string[]; tips: string[] }; }
+
+export default function TravelPage({ language }: { language: string }) {
+  const [temples, setTemples] = useState<Temple[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [origin, setOrigin] = useState('');
+  const [destination, setDestination] = useState('');
+  const [selectedTemple, setSelectedTemple] = useState<Temple | null>(null);
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [templeSearch, setTempleSearch] = useState('');
+
+  useEffect(() => { fetch('/api/temples').then(r => r.json()).then(setTemples).catch(console.error).finally(() => setLoading(false)); }, []);
+
+  const filteredTemples = useMemo(() => {
+    if (!templeSearch) return temples;
+    const q = templeSearch.toLowerCase();
+    return temples.filter(tp => tp.name.toLowerCase().includes(q) || tp.city.toLowerCase().includes(q) || tp.state.toLowerCase().includes(q));
+  }, [temples, templeSearch]);
+
+  const handleSelectTemple = (temple: Temple) => { setSelectedTemple(temple); setDestination(`${temple.name}, ${temple.city}, ${temple.state}`); setTempleSearch(''); };
+
+  const handleGetDirections = async () => {
+    if (!origin || !selectedTemple) return;
+    setSearching(true);
+    try {
+      const res = await fetch('/api/travel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ origin, destination_name: selectedTemple.name, destination_city: selectedTemple.city, destination_state: selectedTemple.state, destination_lat: selectedTemple.latitude, destination_lng: selectedTemple.longitude }) });
+      setRouteInfo(await res.json());
+    } catch (err) { console.error(err); } finally { setSearching(false); }
+  };
+
+  const openGoogleMaps = () => { if (!selectedTemple) return; window.open(`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${selectedTemple.latitude},${selectedTemple.longitude}&travelmode=driving`, '_blank'); };
+
+  return (
+    <div className="pt-6 pb-12 px-4">
+      <div className="max-w-4xl mx-auto">
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-8">
+          <h1 className="font-display text-3xl md:text-4xl font-bold text-ink">{t('travelTitle', language)}</h1>
+          <p className="text-ink-muted mt-1">{t('travelDesc', language)}</p>
+        </motion.div>
+
+        <div className="bg-surface border border-border rounded-xl p-5 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="text-[12px] font-semibold uppercase tracking-wider text-ink-faint mb-1.5 block">{t('startingLocation', language)}</label>
+              <div className="relative">
+                <MapPin size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-sage" />
+                <input type="text" placeholder="e.g., New Delhi, Mumbai, Chennai…" value={origin} onChange={e => setOrigin(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2.5 bg-parchment border border-border rounded-lg text-sm text-ink placeholder:text-ink-faint/50 focus:outline-none focus:border-vermillion/40" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[12px] font-semibold uppercase tracking-wider text-ink-faint mb-1.5 block">{t('destinationTemple', language)}</label>
+              <div className="relative">
+                <Navigation size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-vermillion" />
+                <input type="text" placeholder={t('searchSelectTemple', language)} value={templeSearch || destination} onChange={e => { setTempleSearch(e.target.value); setDestination(''); setSelectedTemple(null); }}
+                  className="w-full pl-9 pr-3 py-2.5 bg-parchment border border-border rounded-lg text-sm text-ink placeholder:text-ink-faint/50 focus:outline-none focus:border-vermillion/40" />
+              </div>
+              {templeSearch && filteredTemples.length > 0 && (
+                <div className="mt-1 bg-surface border border-border rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                  {filteredTemples.slice(0, 10).map(tp => (
+                    <button key={tp.id} onClick={() => handleSelectTemple(tp)} className="w-full text-left px-3 py-2 text-sm hover:bg-parchment-warm transition-colors border-b border-border-light last:border-0">
+                      <span className="font-medium text-ink">{tp.name}</span>
+                      <span className="text-ink-faint text-[12px] ml-2">{tp.city}, {tp.state} · {tp.type}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button onClick={handleGetDirections} disabled={!origin || !selectedTemple || searching}
+              className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-vermillion text-white font-medium text-sm hover:bg-vermillion-deep disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              {searching ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> {t('calculating', language)}</> : <><Route size={15} /> {t('getDirections', language)}</>}
+            </button>
+            {selectedTemple && (
+              <button onClick={openGoogleMaps} className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg border border-border text-ink font-medium text-sm hover:bg-parchment-warm transition-colors">
+                <ExternalLink size={14} /> {t('openGoogleMaps', language)}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {selectedTemple && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="bg-surface border border-border rounded-xl p-5 mb-6">
+            <div className="flex items-start justify-between mb-3">
+              <div><h3 className="font-display text-lg font-semibold text-ink">{selectedTemple.name}</h3><p className="text-ink-faint text-sm">{selectedTemple.city}, {selectedTemple.state} · {selectedTemple.deity}</p></div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-vermillion/8 text-vermillion">{selectedTemple.type}</span>
+            </div>
+            <AudioPlayer text={`${selectedTemple.name}. ${selectedTemple.city}, ${selectedTemple.state}. ${selectedTemple.description}`} language={language} title={`${selectedTemple.name} — ${t('audioGuide', language)}`} />
+            <p className="text-ink-light text-sm mt-3 leading-relaxed">{selectedTemple.description}</p>
+          </motion.div>
+        )}
+
+        {routeInfo && (
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+            <h2 className="font-display text-xl font-semibold text-ink flex items-center gap-2"><Route size={18} className="text-vermillion" /> {t('travelOptions', language)}: {origin} → {selectedTemple?.name}</h2>
+            <AudioPlayer text={`${t('travelOptions', language)} ${origin} ${selectedTemple?.name}. ${t('byRoad', language)}: ${routeInfo.road.distance}, ${routeInfo.road.duration}. ${routeInfo.road.steps.join('. ')}. ${t('byTrain', language)}: ${routeInfo.train.tips.join('. ')}. ${t('byFlight', language)}: ${routeInfo.flight.tips.join('. ')}`} language={language} title={`${t('travelOptions', language)} — ${t('audioGuide', language)}`} />
+
+            <div className="bg-surface border border-border rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg bg-sage/10 flex items-center justify-center"><Car size={16} className="text-sage" /></div><div><h3 className="font-display font-semibold text-ink">{t('byRoad', language)}</h3><p className="text-ink-faint text-[12px]">{routeInfo.road.distance} · {routeInfo.road.duration}</p></div></div>
+              <ol className="space-y-2">{routeInfo.road.steps.map((step, i) => (<li key={i} className="flex items-start gap-2 text-sm text-ink-light"><span className="w-5 h-5 rounded-full bg-sage/10 text-sage text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5">{i+1}</span>{step}</li>))}</ol>
+            </div>
+
+            <div className="bg-surface border border-border rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg bg-turmeric/10 flex items-center justify-center"><Train size={16} className="text-turmeric-deep" /></div><h3 className="font-display font-semibold text-ink">{t('byTrain', language)}</h3></div>
+              <div className="mb-3"><p className="text-[12px] font-semibold uppercase tracking-wider text-ink-faint mb-1">{t('nearestStations', language)}</p><div className="flex flex-wrap gap-2">{routeInfo.train.stations.map(s => (<span key={s} className="px-2.5 py-1 rounded-md bg-turmeric/8 text-turmeric-deep text-[13px] font-medium">{s}</span>))}</div></div>
+              <ul className="space-y-1.5">{routeInfo.train.tips.map((tip, i) => (<li key={i} className="flex items-start gap-2 text-sm text-ink-light"><Info size={13} className="text-turmeric flex-shrink-0 mt-0.5" />{tip}</li>))}</ul>
+            </div>
+
+            <div className="bg-surface border border-border rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-lg bg-vermillion/8 flex items-center justify-center"><Plane size={16} className="text-vermillion" /></div><h3 className="font-display font-semibold text-ink">{t('byFlight', language)}</h3></div>
+              <div className="mb-3"><p className="text-[12px] font-semibold uppercase tracking-wider text-ink-faint mb-1">{t('nearestAirports', language)}</p><div className="flex flex-wrap gap-2">{routeInfo.flight.airports.map(a => (<span key={a} className="px-2.5 py-1 rounded-md bg-vermillion/8 text-vermillion text-[13px] font-medium">{a}</span>))}</div></div>
+              <ul className="space-y-1.5">{routeInfo.flight.tips.map((tip, i) => (<li key={i} className="flex items-start gap-2 text-sm text-ink-light"><Info size={13} className="text-vermillion flex-shrink-0 mt-0.5" />{tip}</li>))}</ul>
+            </div>
+          </motion.div>
+        )}
+
+        {!routeInfo && !loading && (
+          <div className="mt-8">
+            <h2 className="font-display text-xl font-semibold text-ink mb-4">{t('popularDestinations', language)}</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {temples.filter(tp => ['Jyotirlinga', 'Char Dham'].includes(tp.type)).slice(0, 8).map(tp => (
+                <button key={tp.id} onClick={() => handleSelectTemple(tp)} className="text-left bg-surface border border-border rounded-lg p-3 hover:border-vermillion/30 transition-all group">
+                  <p className="font-display text-sm font-semibold text-ink group-hover:text-vermillion transition-colors">{tp.name}</p>
+                  <p className="text-ink-faint text-[12px]">{tp.city}, {tp.state} · {tp.type}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+========================================
+FILE: vite.config.ts
+========================================
+
+import { defineConfig, loadEnv } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+// https://vite.dev/config/
+export default defineConfig(async ({ mode }) => {
+  const plugins = [react(), tailwindcss()];
+  try {
+    // @ts-ignore
+    const m = await import('./.vite-source-tags.js');
+    plugins.push(m.sourceTags());
+  } catch {}
+
+  const env = loadEnv(mode, process.cwd(), ['VITE_', 'NEXT_PUBLIC_']);
+  const processEnvDefines: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    processEnvDefines[`process.env.${key}`] = JSON.stringify(value);
+  }
+
+  return {
+    plugins,
+    envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
+    define: processEnvDefines,
+  };
+})
+

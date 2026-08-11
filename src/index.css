@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Source+Sans+3:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-parchment: #FAF6F0;
+  --color-parchment-warm: #F5EDE0;
+  --color-parchment-deep: #EDE4D3;
+  --color-ink: #2C1810;
+  --color-ink-light: #4A3728;
+  --color-ink-muted: #7A6A5A;
+  --color-ink-faint: #A89888;
+  --color-vermillion: #C24D2B;
+  --color-vermillion-light: #D4714F;
+  --color-vermillion-deep: #9E3A1E;
+  --color-turmeric: #C49B2A;
+  --color-turmeric-light: #D4B44E;
+  --color-turmeric-deep: #A07E1A;
+  --color-sage: #5A7247;
+  --color-sage-light: #7A9464;
+  --color-lotus: #B85C8A;
+  --color-border: #DDD4C4;
+  --color-border-light: #EDE6DA;
+  --color-surface: #FFFFFF;
+  --color-surface-warm: #FBF8F4;
+  --color-surface-alt: #F2ECE2;
+  --color-cosmic-dark: #0A0E1A;
+  --color-cosmic-navy: #0F1629;
+  --color-cosmic-gold: #C9A84C;
+  --color-cosmic-glow: #E8D48B;
+  --font-display: 'Cormorant Garamond', Georgia, serif;
+  --font-body: 'Source Sans 3', 'Segoe UI', sans-serif;
+  --font-devanagari: 'Noto Sans Devanagari', sans-serif;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-parchment);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--color-parchment); }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-ink-faint); }
+
+::selection {
+  background: rgba(194, 77, 43, 0.15);
+  color: var(--color-ink);
+}
+
+/* ---- Animations ---- */
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up {
+  animation: fadeUp 0.5s ease-out forwards;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+/* Shloka ticker */
+@keyframes shloka-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.shloka-marquee {
+  animation: shloka-scroll 60s linear infinite;
+}
+.shloka-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* Kaal Chakra spin — ancient cosmic wheel */
+@keyframes kaal-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.kaal-chakra-spinning {
+  animation: kaal-spin 4s linear infinite;
+}
+.kaal-chakra-idle {
+  animation: none;
+}
+
+/* Cosmic glow on the wheel when active */
+@keyframes cosmic-glow {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(201,168,76,0.3)); }
+  50% { filter: drop-shadow(0 0 14px rgba(201,168,76,0.7)); }
+}
+.cosmic-glow-active {
+  animation: cosmic-glow 2.5s ease-in-out infinite;
+}
+
+/* "मैं समय हूँ" text come-and-go breathing */
+@keyframes samay-breathe {
+  0%   { opacity: 0; transform: scale(0.92); }
+  15%  { opacity: 1; transform: scale(1); }
+  85%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.92); }
+}
+.samay-breathe {
+  animation: samay-breathe 5s ease-in-out infinite;
+}
+
+/* Staggered variant for the English line */
+.samay-breathe-delayed {
+  animation: samay-breathe 5s ease-in-out infinite;
+  animation-delay: 0.6s;
+}
+
+/* Small "come and go" for the audio player tagline */
+@keyframes samay-fade {
+  0%, 100% { opacity: 0; }
+  20%, 80% { opacity: 0.8; }
+}
+.samay-fade {
+  animation: samay-fade 4s ease-in-out infinite;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--color-vermillion);
+  cursor: pointer;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-border);
+}

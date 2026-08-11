@@ -1,0 +1,31 @@
+import { useState } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import Navbar from './components/Navbar';
+import HomePage from './pages/HomePage';
+import LibraryPage from './pages/LibraryPage';
+import HeritagePage from './pages/HeritagePage';
+import TravelPage from './pages/TravelPage';
+import GranthSuchiPage from './pages/GranthSuchiPage';
+import ChintyagamaPage from './pages/ChintyagamaPage';
+import KamikagamaPage from './pages/KamikagamaPage';  // ← ADD THIS
+
+export default function App() {
+  const [language, setLanguage] = useState('English');
+
+  return (
+    <BrowserRouter>
+      <div className="min-h-screen bg-parchment text-ink">
+        <Navbar language={language} onLanguageChange={setLanguage} />
+        <Routes>
+          <Route path="/" element={<HomePage language={language} />} />
+          <Route path="/library" element={<LibraryPage language={language} />} />
+          <Route path="/heritage" element={<HeritagePage language={language} />} />
+          <Route path="/travel" element={<TravelPage language={language} />} />
+          <Route path="/encyclopedia" element={<GranthSuchiPage language={language} />} />
+          <Route path="/chintyagama" element={<ChintyagamaPage language={language} />} />
+          <Route path="/kamikagama" element={<KamikagamaPage language={language} />} />  // ← ADD THIS
+        </Routes>
+      </div>
+    </BrowserRouter>
+  );
+}
