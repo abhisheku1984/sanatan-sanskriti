@@ -5,9 +5,25 @@ services:
     region: singapore
     plan: free
     buildCommand: npm install && npm run build
-    startCommand: npm run start
+    startCommand: npm start
     envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Frontend Supabase (Vite)
       - key: VITE_SUPABASE_URL
         value: https://gvrbpvuucrzrbgnhtwoi.supabase.co
       - key: VITE_SUPABASE_ANON_KEY
         value: sb_publishable_r59HlGOIlbXTdDaZuqlNxQ_xCrhaAG0
+      # Backend Supabase
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        value: https://gvrbpvuucrzrbgnhtwoi.supabase.co
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        value: sb_publishable_r59HlGOIlbXTdDaZuqlNxQ_xCrhaAG0
+      # ⚠️ Set this in Render Dashboard → Environment, NOT here
+      - key: NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY
+        value: ""  # Set manually in Render dashboard
+      # Google Auth
+      - key: VITE_GOOGLE_CLIENT_ID
+        value: 1065078894672-rmp5kp8vfjns5rn9kp5psfp16g691043.apps.googleusercontent.com
+      - key: VITE_GOOGLE_AUTH_PROXY
+        value: https://designarena.ai/auth/google/callback
