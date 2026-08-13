@@ -6,7 +6,7 @@ import { parse } from 'url'
 import { resolve } from 'path'
 import { pathToFileURL } from 'url'
 
-// Vite plugin that serves Vercel-style API routes during local development
+// Vite plugin that serves Vercel-style API routes during local development AND production preview
 function apiRoutesPlugin() {
   return {
     name: 'api-routes',
@@ -95,13 +95,11 @@ function apiRoutesPlugin() {
 export default defineConfig(async ({ mode }) => {
   const plugins = [react(), tailwindcss()]
 
+  // ENABLE API ROUTES IN BOTH DEVELOPMENT AND PREVIEW MODES
   if (mode === 'development' || mode === 'production') {
     plugins.push(apiRoutesPlugin())
-}
+  }
 
-preview: {
-  middlewareMode: true,
-},
   try {
     // @ts-expect-error optional local plugin may not exist
     const m = await import('./.vite-source-tags.js')
@@ -128,6 +126,9 @@ preview: {
     plugins,
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
     define: processEnvDefines,
+    preview: {
+      middlewareMode: true,
+    },
     build: {
       rollupOptions: {
         output: {
