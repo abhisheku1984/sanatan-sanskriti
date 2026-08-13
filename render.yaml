@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: sanatan-sanskriti
+    env: node
+    region: singapore
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm run preview
+    envVars:
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        value: https://gvrbpvuucrzrbgnhtwoi.supabase.co
+      - key: NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2cmJwdnV1Y3J6cmJnbmh0d29pIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NjIwODI0NywiZXhwIjoyMTAxNzg0MjQ3fQ.AQy3lZZQj8CKo-nt4kiejZR4BUHPwCNzsK9whYEzbGo
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2cmJwdnV1Y3J6cmJnbmh0d29pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyMDgyNDcsImV4cCI6MjEwMTc4NDI0N30.ebcZmug_QDi2rVT5p08__nLjirq7ndxuzqsxuadFWas
+      - key: VITE_SUPABASE_URL
+        value: https://gvrbpvuucrzrbgnhtwoi.supabase.co
+      - key: VITE_SUPABASE_ANON_KEY
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2cmJwdnV1Y3J6cmJnbmh0d29pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyMDgyNDcsImV4cCI6MjEwMTc4NDI0N30.ebcZmug_QDi2rVT5p08__nLjirq7ndxuzqsxuadFWas
