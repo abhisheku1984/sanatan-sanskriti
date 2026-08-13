@@ -57,7 +57,7 @@ export default function LibraryPage({ language }: { language: string }) {
       <div className="max-w-5xl mx-auto">
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-8">
           <h1 className="font-display text-3xl md:text-4xl font-bold text-ink">{t('sacredLibrary', language)}</h1>
-          <p className="text-ink-muted mt-1">{t('sacredLibrarySub', language)}</p>
+          <p className="text-ink-muted mt-1">Explore the timeless wisdom of sacred Hindu texts and teachings</p>
         </motion.div>
 
         {error && (
@@ -69,7 +69,7 @@ export default function LibraryPage({ language }: { language: string }) {
         <div className="flex flex-col sm:flex-row gap-3 mb-6">
           <div className="relative flex-1">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" />
-            <input type="text" placeholder={t('searchBooks', language)} value={search} onChange={e => setSearch(e.target.value)}
+            <input type="text" placeholder="Search books, authors, topics..." value={search} onChange={e => setSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-2.5 bg-parchment border border-border rounded-lg text-sm text-ink placeholder:text-ink-faint/50 focus:outline-none focus:border-vermillion/40" />
           </div>
           <select value={category} onChange={e => setCategory(e.target.value)} className="px-3 py-2.5 bg-parchment border border-border rounded-lg text-sm text-ink focus:outline-none focus:border-vermillion/40">

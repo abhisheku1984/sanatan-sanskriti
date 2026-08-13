@@ -64,7 +64,7 @@ export default function HomePage({ language = 'English' }: { language?: string }
             <p className="font-display text-xl md:text-2xl text-cosmic-gold/80 italic mt-2 samay-breathe-delayed">{t('iAmTime', language)}</p>
           </div>
           <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ duration: 1, delay: 0.8 }} viewport={{ once: true }} className="mt-6">
-            <p className="font-devanagari text-cosmic-gold/50 text-sm">à¤•à¤¾à¤²à¥‹à¤½à¤¸à¥à¤®à¤¿ à¤²à¥‹à¤•à¤•à¥à¤·à¤¯à¤•à¥ƒà¤¤à¥à¤ªà¥à¤°à¤µà¥ƒà¤¦à¥à¤§à¤ƒ</p>
+            <p className="font-devanagari text-cosmic-gold/50 text-sm"> </p>
             <p className="text-cosmic-glow/35 text-xs mt-1">{t('gitaRef', language)}</p>
             <p className="text-cosmic-glow/40 text-sm max-w-lg mx-auto leading-relaxed mt-4">{t('kaalDesc', language)}</p>
           </motion.div>

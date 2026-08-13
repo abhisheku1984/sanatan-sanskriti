@@ -8,7 +8,7 @@
 // ===== DEVOTIONAL LIBRARY TYPES =====
 
 export type ContentCategory = 'vedic' | 'chalisa' | 'stotra' | 'ashtakam' | 'kavach' | 'mantra';
-export type Deity = 'Shiva' | 'Vishnu' | 'Devi' | 'Ganesha' | 'Hanuman' | 'Surya' | 'Durga' | 'Lakshmi' | 'Saraswati' | 'Brahma' | 'All';
+export type Deity = 'Shiva' | 'Vishnu' | 'Devi' | 'Ganesha' | 'Hanuman' | 'Surya' | 'Durga' | 'Lakshmi' | 'Saraswati' | 'Brahma' | 'Shani' | 'All';
 
 export interface DevoationalVerse {
   sanskrit: string;

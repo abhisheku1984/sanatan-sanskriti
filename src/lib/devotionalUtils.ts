@@ -35,7 +35,9 @@ export async function getYouTubeVideoDetails(videoId: string): Promise<YouTubeVi
       duration: parseDuration(video.contentDetails.duration),
       views: parseInt(video.statistics.viewCount) || 0,
       uploadDate: new Date(video.snippet.publishedAt),
-      channelName: video.snippet.channelTitle
+      channelName: video.snippet.channelTitle,
+      videoUrl: `https://youtube.com/watch?v=${video.id}`,
+      isLive: false
     };
   } catch (error) {
     console.error('Error fetching YouTube video:', error);
@@ -88,7 +90,9 @@ export async function getYouTubePlaylistVideos(
       duration: 0, // Would need additional API call to get
       views: 0,
       uploadDate: new Date(item.snippet.publishedAt),
-      channelName: item.snippet.channelTitle
+      channelName: item.snippet.channelTitle,
+      videoUrl: `https://youtube.com/watch?v=${item.snippet.resourceId.videoId}`,
+      isLive: false
     })) || [];
 
     return { playlist, videos };

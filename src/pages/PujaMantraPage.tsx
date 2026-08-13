@@ -312,7 +312,7 @@ export default function PujaMantraPage({ language }: { language: string }) {
             जय शिव शंकर | वन्दे माता | जय हनुमान | नमः शिवाय
           </p>
           <p className="text-[12px] text-ink-faint">
-            © 2024 Sanatan Sanskriti. All devotional content is for spiritual learning and worship purposes.
+            © 2026 Sanatan Sanskriti. All devotional content is for spiritual learning and worship purposes.
           </p>
         </div>
       </motion.footer>

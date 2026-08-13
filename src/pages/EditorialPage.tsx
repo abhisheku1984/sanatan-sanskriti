@@ -51,7 +51,7 @@ export default function EditorialPage({ language = 'English' }: { language?: str
                 S
               </span>
               <span>
-                By <strong className="text-cosmic-glow/70">Sanvi</strong> (Age 10)
+                By <strong className="text-cosmic-glow/70">Sanvi</strong>
               </span>
             </div>
           </div>
