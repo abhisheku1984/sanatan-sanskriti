@@ -6,7 +6,7 @@ import { useEffect, useState, useRef } from 'react';
  */
 export function usePageContent() {
   const [pageContent, setPageContent] = useState<string>('');
-  const [isReady, setIsReady] = useState(false);
+  const [isReady, setIsReady] = useState<boolean>(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -36,11 +36,10 @@ function extractAllText(element: HTMLElement): string {
   const walker = document.createTreeWalker(
     element,
     NodeFilter.SHOW_TEXT,
-    null,
-    false
+    null
   );
 
-  let textNode;
+  let textNode: Node | null;
   let currentParagraph = '';
 
   while ((textNode = walker.nextNode())) {

@@ -1,17 +1,17 @@
 import './api/load-env.js'
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv, type ConfigEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { parse } from 'url'
 import { resolve } from 'path'
 import { pathToFileURL } from 'url'
 
-// Vite plugin that serves Vercel-style API routes during local development AND production preview
-function apiRoutesPlugin() {
+// Vite plugin that serves Vercel-style API routes during development
+function apiRoutesPlugin(): any {
   return {
     name: 'api-routes',
-    configureServer(server) {
-      server.middlewares.use(async (req, res, next) => {
+    configureServer(server: any) {
+      server.middlewares.use(async (req: any, res: any, next: any): Promise<void> => {
         const parsed = parse(req.url || '', true)
         const pathname = parsed.pathname || ''
 
@@ -27,7 +27,7 @@ function apiRoutesPlugin() {
 
         // Parse JSON body for POST/PUT
         if (req.method === 'POST' || req.method === 'PUT') {
-          const chunks = []
+          const chunks: Buffer[] = []
           for await (const chunk of req) chunks.push(chunk)
           const body = Buffer.concat(chunks).toString()
           try {
@@ -42,27 +42,28 @@ function apiRoutesPlugin() {
           _status: 200,
           _headers: {} as Record<string, string>,
           _ended: false,
-          setHeader(key, value) {
+          setHeader(key: string, value: string): any {
             this._headers[key] = value
             res.setHeader(key, value)
             return this
           },
-          status(code) {
+          status(code: number): any {
             this._status = code
             res.statusCode = code
             return this
           },
-          json(data) {
+          json(data: any): any {
             if (this._ended) return this
             this._ended = true
             if (!res.headersSent) res.setHeader('Content-Type', 'application/json')
             res.end(JSON.stringify(data))
             return this
           },
-          end(data) {
+          end(data?: any): void {
             if (this._ended) return
             this._ended = true
-            res.end(data)
+            if (data) res.end(data)
+            else res.end()
           },
         }
 
@@ -78,12 +79,13 @@ function apiRoutesPlugin() {
             res.statusCode = 404
             res.end(JSON.stringify({ error: 'API route not found' }))
           }
-        } catch (err) {
-          console.error(`[API Error] ${routeName}:`, err.message)
+        } catch (err: unknown) {
+          const error = err instanceof Error ? err.message : String(err)
+          console.error(`[API Error] ${routeName}:`, error)
           if (!mockRes._ended) {
             res.statusCode = 500
             res.setHeader('Content-Type', 'application/json')
-            res.end(JSON.stringify({ error: err.message }))
+            res.end(JSON.stringify({ error: error }))
           }
         }
       })
@@ -92,11 +94,11 @@ function apiRoutesPlugin() {
 }
 
 // https://vite.dev/config/
-export default defineConfig(async ({ mode }) => {
-  const plugins = [react(), tailwindcss()]
+export default defineConfig(async ({ mode }: ConfigEnv) => {
+  const plugins: any[] = [react(), tailwindcss()]
 
-  // ENABLE API ROUTES IN BOTH DEVELOPMENT AND PREVIEW MODES
-  if (mode === 'development' || mode === 'production') {
+  // Enable API routes in development
+  if (mode === 'development') {
     plugins.push(apiRoutesPlugin())
   }
 
@@ -109,7 +111,6 @@ export default defineConfig(async ({ mode }) => {
   }
 
   // Load environment variables with both VITE_ and NEXT_PUBLIC_ prefixes
-  // This ensures compatibility with Vite, Vercel, and Render
   const env = loadEnv(mode, process.cwd(), ['VITE_', 'NEXT_PUBLIC_'])
   const processEnvDefines: Record<string, string> = {}
 
@@ -126,9 +127,6 @@ export default defineConfig(async ({ mode }) => {
     plugins,
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
     define: processEnvDefines,
-    preview: {
-      middlewareMode: true,
-    },
     build: {
       rollupOptions: {
         output: {
