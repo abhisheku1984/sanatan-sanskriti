@@ -107,10 +107,18 @@ export default defineConfig(async ({ mode }) => {
     /* intentionally empty: optional plugin may not exist */
   }
 
+  // Load environment variables with both VITE_ and NEXT_PUBLIC_ prefixes
+  // This ensures compatibility with Vite, Vercel, and Render
   const env = loadEnv(mode, process.cwd(), ['VITE_', 'NEXT_PUBLIC_'])
   const processEnvDefines: Record<string, string> = {}
+
   for (const [key, value] of Object.entries(env)) {
     processEnvDefines[`process.env.${key}`] = JSON.stringify(value)
+  }
+
+  // Log loaded environment variables in development
+  if (mode === 'development') {
+    console.log('[vite] Loaded environment variables:', Object.keys(env).filter(k => k.includes('SUPABASE')))
   }
 
   return {

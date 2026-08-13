@@ -209,7 +209,7 @@ export default function EditorialPage({ language = 'English' }: { language?: str
 
             <div className="flex flex-wrap justify-center gap-2 mb-6">
               <span className="px-4 py-1.5 rounded-full bg-surface border border-border text-ink-muted text-[13px] font-medium">
-                🇮🇳 Bharat Mata ki Jai!
+                Bharat Mata ki Jai!
               </span>
               <span className="px-4 py-1.5 rounded-full bg-surface border border-border text-ink-muted text-[13px] font-medium">
                 Vande Mataram!
@@ -218,7 +218,7 @@ export default function EditorialPage({ language = 'English' }: { language?: str
                 Adi Guru Shankaracharya ki Jai!
               </span>
               <span className="px-4 py-1.5 rounded-full bg-surface border border-border text-ink-muted text-[13px] font-medium">
-                Sadhu Santo ki Jai!
+                Sanatan ki Jai!
               </span>
             </div>
 

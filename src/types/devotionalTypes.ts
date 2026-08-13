@@ -1,6 +1,8 @@
 /**
  * devotionalTypes.ts
  * Type definitions for Hindu Devotional Library and Temple Streaming
+ * UPDATED: Added youtubeChannelId, youtubePlaylistId, latestVideoId,
+ *          lastRefreshed, streamType for actual live/recorded aarti videos
  */
 
 // ===== DEVOTIONAL LIBRARY TYPES =====
@@ -47,13 +49,19 @@ export interface DevotionalLibraryState {
 
 // ===== TEMPLE STREAMING TYPES =====
 
-export type AartiType = 'Mangala' | 'Shringar' | 'Sandhya' | 'Isha' | 'Bhog';
+export type AartiType = 'Mangala' | 'Shringar' | 'Sandhya' | 'Isha' | 'Bhog' | 'Rajbhog' | 'Shayan';
+
+export type TempleCategory = 'jyotirlinga' | 'shakti-peeth' | 'char-dham' | 'chota-char-dham' | 'major' | 'all';
+
+export type StreamType = 'live' | 'recorded' | 'upcoming';
 
 export interface AartiTiming {
   type: AartiType;
-  startTime: string; // HH:MM format
+  startTime: string; // HH:MM AM/PM format
   duration: number; // in minutes
   dayOfWeek?: string[]; // Optional: specific days
+  officialUrl?: string; // Link to official temple website for this aarti
+  youtubeVideoId?: string; // Latest aarti video ID for this specific aarti
 }
 
 export interface TempleStream {
@@ -63,9 +71,19 @@ export interface TempleStream {
   deity: Deity;
   state: string;
   city: string;
-  youtubeChannelId: string;
-  youtubeVideoId?: string; // Current live video
+
+  // YouTube Integration
+  youtubeChannelId?: string; // For live_stream embed: youtube.com/embed/live_stream?channel=CHANNEL_ID
+  youtubePlaylistId?: string; // For aarti playlists
+  youtubeSearchKeywords?: string; // Fallback search keywords
+  latestVideoId?: string; // Most recent aarti/darshan video ID
+  latestVideoTitle?: string; // Title of latest video
+  latestVideoThumbnail?: string; // Thumbnail of latest video
+  latestVideoUploadedAt?: string; // ISO date string
+
+  officialWebsite: string;
   isLive: boolean;
+  streamType: StreamType;
   aartiTimings: AartiTiming[];
   description: string;
   imageUrl?: string;
@@ -81,6 +99,15 @@ export interface TempleStream {
     startTime: string;
     hoursUntil: number;
   };
+
+  // Categorization
+  category: TempleCategory;
+  templeNumber?: number; // For Jyotirlinga (1-12), Shakti Peeth (1-51), etc.
+  significance?: string; // Special significance text
+
+  // Refresh metadata
+  lastRefreshed: string; // ISO timestamp
+  refreshInterval: number; // Minutes between auto-refresh
 }
 
 export interface TempleStreamingState {
@@ -88,9 +115,13 @@ export interface TempleStreamingState {
   liveTemples: TempleStream[];
   selectedTemple: TempleStream | null;
   selectedDeity: Deity;
+  selectedCategory: TempleCategory;
+  searchQuery: string;
   isLoading: boolean;
+  isRefreshing: boolean;
   error: string | null;
   autoRefreshEnabled: boolean;
+  lastGlobalRefresh: string;
 }
 
 // ===== YOUTUBE API TYPES =====
@@ -103,6 +134,8 @@ export interface YouTubeVideo {
   views: number;
   uploadDate: Date;
   channelName: string;
+  videoUrl: string;
+  isLive: boolean;
 }
 
 export interface YouTubePlaylist {
@@ -111,6 +144,14 @@ export interface YouTubePlaylist {
   thumbnail: string;
   videoCount: number;
   channelName: string;
+}
+
+export interface YouTubeChannel {
+  id: string;
+  title: string;
+  thumbnail: string;
+  subscriberCount: number;
+  videoCount: number;
 }
 
 // ===== UI COMPONENT TYPES =====
@@ -136,9 +177,9 @@ export interface VideoPlayerProps {
 
 export interface SearchFilterProps {
   onDeityChange: (deity: Deity) => void;
-  onCategoryChange: (category: ContentCategory) => void;
+  onCategoryChange: (category: TempleCategory) => void;
   onSearchChange: (query: string) => void;
   selectedDeity: Deity;
-  selectedCategory: ContentCategory;
+  selectedCategory: TempleCategory;
   searchQuery: string;
 }
