@@ -1,130 +1,182 @@
-import { useState, useEffect, startTransition } from 'react';
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Minus, Plus, Languages } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
+import { ArrowLeft, BookOpen, Minus, Plus } from 'lucide-react';
+import supabase from '../lib/supabase';
 import AudioPlayer from './AudioPlayer';
 import LoadingSpinner from './LoadingSpinner';
 import { t } from '../lib/translations';
-import { translateText } from '../lib/translate';
 
-interface Chapter { id: number; book_id: number; chapter_number: number; title: string; content: string; }
-interface Book { id: number; title: string; author: string; description: string; language: string; category: string; cover_image: string; total_chapters: number; }
+interface Book {
+  id: number;
+  title: string;
+  author: string;
+  description: string;
+  language: string;
+  category: string;
+  cover_image: string;
+  total_chapters: number;
+}
 
-export default function BookReader({ book, onBack, language }: { book: Book; onBack: () => void; language: string }) {
+interface Chapter {
+  id: number;
+  book_id?: number;
+  title?: string;
+  name?: string;
+  content?: string;
+  text?: string;
+  body?: string;
+  chapter_number?: number;
+  number?: number;
+}
+
+export default function BookReader({
+  book,
+  onBack,
+  language,
+}: {
+  book: Book;
+  onBack: () => void;
+  language: string;
+}) {
   const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [currentIdx, setCurrentIdx] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
   const [fontSize, setFontSize] = useState(16);
-  const [translatedContent, setTranslatedContent] = useState<string>('');
-  const [translatedTitle, setTranslatedTitle] = useState<string>('');
-  const [translating, setTranslating] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/chapters?book_id=${book.id}`).then(r => r.json()).then(setChapters).catch(console.error).finally(() => setLoading(false));
-  }, [book.id]);
+    let cancelled = false;
 
-  useEffect(() => {
-    const chapter = chapters[currentIdx];
-    if (!chapter) return;
+    async function loadChapters() {
+      setLoading(true);
+      setError('');
 
-    if (language === 'English') {
-      startTransition(() => {
-        setTranslatedContent(chapter.content);
-        setTranslatedTitle(chapter.title);
-      });
-      return;
+      const { data, error: fetchError } = await supabase
+        .from('chapters')
+        .select('*')
+        .eq('book_id', book.id)
+        .order('chapter_number', { ascending: true });
+
+      if (cancelled) return;
+
+      if (fetchError) {
+        const fallback = await supabase
+          .from('chapters')
+          .select('*')
+          .eq('book_id', book.id)
+          .order('id', { ascending: true });
+
+        if (cancelled) return;
+
+        if (fallback.error) {
+          console.error('Chapters error:', fallback.error.message);
+          setChapters([]);
+          setError('Unable to load chapters. Please try again later.');
+          setLoading(false);
+          return;
+        }
+
+        setChapters(fallback.data ?? []);
+        setLoading(false);
+        return;
+      }
+
+      setChapters(data ?? []);
+      setLoading(false);
     }
 
-    startTransition(() => {
-      setTranslating(true);
-      setTranslatedContent('');
-      setTranslatedTitle('');
-    });
+    loadChapters();
 
-    Promise.all([
-      translateText(chapter.content, language),
-      translateText(chapter.title, language),
-    ]).then(([content, title]) => {
-      startTransition(() => {
-        setTranslatedContent(content);
-        setTranslatedTitle(title);
-      });
-    }).catch(() => {
-      startTransition(() => {
-        setTranslatedContent(chapter.content);
-        setTranslatedTitle(chapter.title);
-      });
-    }).finally(() => {
-      startTransition(() => setTranslating(false));
-    });
-  }, [chapters, currentIdx, language]);
+    return () => {
+      cancelled = true;
+    };
+  }, [book.id]);
 
-  const chapter = chapters[currentIdx];
-  if (loading) return <LoadingSpinner />;
+  const chapter = chapters[activeIndex];
+  const chapterTitle = chapter?.title || chapter?.name || `Chapter ${activeIndex + 1}`;
+  const chapterText = chapter?.content || chapter?.text || chapter?.body || '';
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-3xl mx-auto">
+    <div className="max-w-3xl mx-auto">
       <div className="flex items-center justify-between mb-6">
-        <button onClick={onBack} className="flex items-center gap-1.5 text-ink-muted hover:text-vermillion text-sm transition-colors"><ArrowLeft size={15} /> {t('backToLibrary', language)}</button>
+        <button
+          onClick={onBack}
+          className="inline-flex items-center gap-2 text-sm text-ink-muted hover:text-vermillion"
+        >
+          <ArrowLeft size={16} />
+          Back to Library
+        </button>
+
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-vermillion/8 text-vermillion text-[11px] font-medium">
-            <Languages size={12} />
-            {language}
-          </div>
-          <div className="flex items-center gap-1 border border-border rounded-md">
-            <button onClick={() => setFontSize(Math.max(12, fontSize - 2))} className="px-2 py-1 text-ink-muted hover:text-ink"><Minus size={13} /></button>
-            <span className="text-[11px] text-ink-faint px-1">{fontSize}px</span>
-            <button onClick={() => setFontSize(Math.min(26, fontSize + 2))} className="px-2 py-1 text-ink-muted hover:text-ink"><Plus size={13} /></button>
+          <span className="px-3 py-1 rounded-full bg-parchment border border-border text-xs text-ink-muted">
+            English
+          </span>
+          <div className="flex items-center border border-border rounded-lg overflow-hidden text-ink-muted">
+            <button
+              onClick={() => setFontSize((s) => Math.max(12, s - 2))}
+              className="px-2 py-1 hover:text-vermillion"
+            >
+              <Minus size={14} />
+            </button>
+            <span className="px-2 text-xs">{fontSize}px</span>
+            <button
+              onClick={() => setFontSize((s) => Math.min(28, s + 2))}
+              className="px-2 py-1 hover:text-vermillion"
+            >
+              <Plus size={14} />
+            </button>
           </div>
         </div>
       </div>
 
       <div className="text-center mb-8">
-        <h1 className="font-display text-2xl md:text-3xl font-semibold text-ink">{book.title}</h1>
-        <p className="text-ink-faint text-sm mt-1">{book.author}</p>
+        <h1 className="font-display text-3xl md:text-4xl font-bold text-ink">{book.title}</h1>
+        <p className="text-ink-muted mt-1">{book.author}</p>
       </div>
 
-      {chapters.length > 0 && (
-        <div className="flex items-center justify-between mb-5 bg-surface border border-border rounded-lg px-3 py-2">
-          <button onClick={() => setCurrentIdx(Math.max(0, currentIdx - 1))} disabled={currentIdx === 0}
-            className="flex items-center gap-1 text-[13px] text-ink-muted hover:text-vermillion disabled:opacity-30 disabled:cursor-not-allowed"><ChevronLeft size={14} /> {t('previous', language)}</button>
-          <select value={currentIdx} onChange={e => setCurrentIdx(Number(e.target.value))} className="bg-parchment border border-border rounded-md px-2 py-1 text-[13px] text-ink max-w-[200px] truncate">
-            {chapters.map((ch, idx) => <option key={ch.id} value={idx}>Ch. {ch.chapter_number}: {ch.title}</option>)}
-          </select>
-          <button onClick={() => setCurrentIdx(Math.min(chapters.length - 1, currentIdx + 1))} disabled={currentIdx === chapters.length - 1}
-            className="flex items-center gap-1 text-[13px] text-ink-muted hover:text-vermillion disabled:opacity-30 disabled:cursor-not-allowed">{t('next', language)} <ChevronRight size={14} /></button>
+      {error && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm text-center">
+          {error}
         </div>
       )}
 
-      {chapter ? (
-        <div className="bg-surface border border-border rounded-xl p-6 md:p-10">
-          <h2 className="font-display text-xl font-semibold text-ink mb-1">
-            {t('chapters', language)} {chapter.chapter_number}: {translatedTitle || chapter.title}
-          </h2>
-          <div className="mb-5">
-            <AudioPlayer
-              text={translatedContent || chapter.content}
-              language={language}
-              title={`Ch. ${chapter.chapter_number} — ${translatedTitle || chapter.title}`}
-            />
-          </div>
-          {translating && (
-            <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-vermillion/5 border border-vermillion/15 rounded-lg">
-              <div className="w-4 h-4 border-2 border-vermillion/30 border-t-vermillion rounded-full animate-spin" />
-              <p className="text-vermillion text-sm">
-                {language === 'Hindi' ? 'अनुवाद हो रहा है' : language === 'Tamil' ? 'மொழிபெயர்க்கப்படுகிறது' : 'Translating'} → {language}…
-              </p>
-            </div>
-          )}
-          <div
-            className="text-ink-light leading-[1.85] whitespace-pre-wrap"
-            style={{ fontSize: `${fontSize}px` }}
-          >
-            {translatedContent || chapter.content}
-          </div>
+      {loading ? (
+        <LoadingSpinner />
+      ) : chapters.length === 0 ? (
+        <div className="text-center py-16 text-ink-faint">
+          <BookOpen size={36} className="mx-auto mb-3 opacity-40" />
+          <p>{t('noBooks', language)}</p>
         </div>
       ) : (
-        <div className="text-center py-16 text-ink-faint"><BookOpen size={36} className="mx-auto mb-3 opacity-40" /><p>{t('noBooks', language)}</p></div>
+        <>
+          <div className="flex flex-wrap gap-2 mb-6">
+            {chapters.map((item, index) => (
+              <button
+                key={item.id}
+                onClick={() => setActiveIndex(index)}
+                className={`px-3 py-1.5 rounded-lg text-xs border ${
+                  index === activeIndex
+                    ? 'border-vermillion/40 bg-vermillion/10 text-vermillion'
+                    : 'border-border text-ink-muted'
+                }`}
+              >
+                {item.chapter_number || item.number || index + 1}. {item.title || item.name || 'Chapter'}
+              </button>
+            ))}
+          </div>
+
+          <div className="bg-surface border border-border rounded-xl p-5 md:p-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display text-xl font-semibold text-ink">{chapterTitle}</h2>
+              {chapterText && (
+                <AudioPlayer text={`${chapterTitle}. ${chapterText}`} language={language} compact />
+              )}
+            </div>
+            <div className="text-ink leading-8 whitespace-pre-wrap" style={{ fontSize }}>
+              {chapterText || 'No chapter text found.'}
+            </div>
+          </div>
+        </>
       )}
-    </motion.div>
+    </div>
   );
 }
