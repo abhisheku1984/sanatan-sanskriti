@@ -95,10 +95,13 @@ function apiRoutesPlugin() {
 export default defineConfig(async ({ mode }) => {
   const plugins = [react(), tailwindcss()]
 
-  if (mode === 'development') {
+  if (mode === 'development' || mode === 'production') {
     plugins.push(apiRoutesPlugin())
-  }
+}
 
+preview: {
+  middlewareMode: true,
+},
   try {
     // @ts-expect-error optional local plugin may not exist
     const m = await import('./.vite-source-tags.js')
