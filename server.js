@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import './api/load-env.js';
 import express from 'express';
 import { fileURLToPath } from 'url';

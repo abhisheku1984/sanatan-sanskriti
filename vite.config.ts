@@ -1,4 +1,3 @@
-import './api/load-env.js'
 import { defineConfig, loadEnv, type ConfigEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -112,8 +111,15 @@ export default defineConfig(async ({ mode }: ConfigEnv) => {
 
   // Load environment variables with both VITE_ and NEXT_PUBLIC_ prefixes
   const env = loadEnv(mode, process.cwd(), ['VITE_', 'NEXT_PUBLIC_'])
-  const processEnvDefines: Record<string, string> = {}
 
+  // 🔧 FIX: Inject .env values into process.env so API routes can read them
+  for (const [key, value] of Object.entries(env)) {
+    if (!process.env[key]) {
+      process.env[key] = value
+    }
+  }
+
+  const processEnvDefines: Record<string, string> = {}
   for (const [key, value] of Object.entries(env)) {
     processEnvDefines[`process.env.${key}`] = JSON.stringify(value)
   }
